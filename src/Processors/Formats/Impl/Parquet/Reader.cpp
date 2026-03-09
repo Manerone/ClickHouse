@@ -6,6 +6,7 @@
 #include <Columns/ColumnTuple.h>
 #include <Columns/FilterDescription.h>
 #include <Common/FieldAccurateComparison.h>
+#include "Core/CaseAwareBlockNameMap.h"
 #include <Formats/FormatFilterInfo.h>
 #include <Interpreters/castColumn.h>
 #include <IO/CompressionMethod.h>
@@ -327,6 +328,25 @@ void Reader::prefilterAndInitRowGroups(const std::optional<std::unordered_set<UI
     primitive_columns = std::move(schemer.primitive_columns);
     total_primitive_columns_in_file = schemer.primitive_column_idx;
     output_columns = std::move(schemer.output_columns);
+
+    for(const auto &col : primitive_columns){
+        std::cout << col.name << " " << col.idx_in_output_block << std::endl;
+    }
+    std::cout << "@@@@@" << std::endl;
+
+    for(const auto &col : output_columns){
+        std::cout << col.name << " " << col.idx_in_output_block.value() << std::endl;
+    }
+
+    CaseAwareBlockNameMap map(this->options.format.input_format_with_names_case_insensitive_column_matching);
+    map.setSize(output_columns.size());
+    for(const auto &col : output_columns){
+        map.add(col.name, col.idx_in_output_block.value());
+    }
+
+    for(auto &col : output_columns){
+        col.idx_in_output_block = map.get(col.name);
+    }
 
     /// Precalculate some column index mappings.
 
