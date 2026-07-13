@@ -1,13 +1,15 @@
 -- Tags: no-fasttest
 -- no-fasttest: needs the XGBoost contrib, which is not built in the fast test.
 
--- The model registry is process-global (not database-scoped), so use names that
--- are unique to this test and clean up defensively to stay re-run safe.
+-- The model registry is process-global (not database-scoped), using names that
+-- are unique to this test
 DROP MODEL IF EXISTS model_04509_xgb;
 DROP MODEL IF EXISTS model_04509_missing;
+DROP MODEL IF EXISTS model_04509_xgb_error;
 
 DROP TABLE IF EXISTS training_04509;
 DROP TABLE IF EXISTS inference_04509;
+DROP TABLE IF EXISTS training_04509_non_numeric;
 
 CREATE TABLE training_04509
 (
@@ -100,5 +102,27 @@ DROP MODEL IF EXISTS model_04509_xgb;
 -- Error: dropping a model that does not exist without IF EXISTS.
 DROP MODEL model_04509_xgb; -- { serverError MODEL_NOT_FOUND }
 
+-- Check error on table with non-numeric columns
+CREATE TABLE training_04509_non_numeric
+(
+    x1 String,
+    x2 String,
+    y String 
+)
+ENGINE = MergeTree
+ORDER BY tuple();
+
+INSERT INTO training_04509_non_numeric VALUES
+('a0', 'b0', 'c0'),
+('a1', 'b1', 'c1'),
+('a2', 'b2', 'c2');
+
+-- Train an XGBoost model with explicit hyper-parameters.
+CREATE MODEL model_04509_xgb_error
+ALGORITHM 'xgboost'
+TARGET 'y'
+FROM TABLE training_04509_non_numeric; -- { serverError XGBOOST_ERROR}
+
+DROP TABLE training_04509_non_numeric;
 DROP TABLE training_04509;
 DROP TABLE inference_04509;
