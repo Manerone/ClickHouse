@@ -4,11 +4,13 @@
 #include <xgboost/c_api.h>
 
 #include <mutex>
-#include <string>
 #include <vector>
 
 namespace DB
 {
+
+struct ColumnWithTypeAndName;
+
 
 /// Extreme Gradient Boosting.
 ///
@@ -28,15 +30,21 @@ protected:
     ColumnPtr predictImpl(const Block & batch) override;
 
 private:
+    void throwIfTypeIsInvalid(const ColumnWithTypeAndName &col);
+
     BoosterHandle booster {nullptr};
     DMatrixHandle dmatrix {nullptr};
 
     HyperParameters hps;
 
+    /// Target column
     String target_column;
+    /// Name of the feature columns
     std::vector<String> feature_columns;
+    /// Number of features
     std::size_t n_features = 0;
-    std::size_t n_rows = 0;
+    /// Number of rows already ingested
+    std::size_t ingested_rows = 0;
 
     /// Keeps the features in a flattened vector
     std::vector<float> flattened_features;

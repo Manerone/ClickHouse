@@ -1,3 +1,5 @@
+#include <Core/ColumnWithTypeAndName.h>
+#include <DataTypes/IDataType.h>
 #include <Models/XGBoostModel.h>
 
 #include <Common/Exception.h>
@@ -43,6 +45,15 @@ void XGBoostModel::setHyperParameters(const HyperParameters & parameters)
     hps = parameters;
 }
 
+void XGBoostModel::throwIfTypeIsInvalid(const ColumnWithTypeAndName &col){
+    auto type = col.type;
+    WhichDataType which(type->getTypeId());
+    if(!which.isNativeNumber() || which.isEnum()){
+        throw Exception(
+            ErrorCodes::XGBOOST_ERROR, "XGBoost only accepts numerical types. The column {} has type {}", col.column->getName(), type->getName());
+    }
+}
+
 void XGBoostModel::startTrainingImpl(const Block & header, const String & target_column_)
 {
     if (!header.has(target_column_))
@@ -75,41 +86,56 @@ void XGBoostModel::addTrainingDataImpl(const Block & batch)
 
     std::vector<const IColumn *> feature_cols;
     feature_cols.reserve(n_features);
-    for (const auto & name : feature_columns)
-        feature_cols.push_back(batch.getByName(name).column.get());
+    for (const auto & name : feature_columns){
+        const auto &col_with_type_and_name = batch.getByName(name);
+        const auto *icol = col_with_type_and_name.column.get();
+        feature_cols.push_back(icol);
 
-    const IColumn & label_col = *batch.getByName(target_column).column;
+        throwIfTypeIsInvalid(col_with_type_and_name);
+    }
 
+    const IColumn * label_col {nullptr};
+    {
+        const auto &col_with_type_and_name = batch.getByName(target_column);
+        label_col = col_with_type_and_name.column.get();
+        throwIfTypeIsInvalid(col_with_type_and_name);
+    }
+    assert(label_col);
 
-    flattened_features.reserve(n_rows + (rows * n_features));
-    labels.reserve(n_rows + rows);
+    flattened_features.reserve(ingested_rows + (rows * n_features));
+    labels.reserve(ingested_rows + rows);
     
-
+    // Transforms from the Block into a flattened vector, stores the tuples row-wise
     for (std::size_t r = 0; r < rows; ++r)
     {
         for (std::size_t c = 0; c < n_features; ++c)
             flattened_features.push_back(static_cast<float>(feature_cols[c]->getFloat64(r)));
-        labels.push_back(static_cast<float>(label_col.getFloat64(r)));
+        labels.push_back(static_cast<float>(label_col->getFloat64(r)));
     }
 
-    n_rows += rows;
+    ingested_rows += rows;
 }
 
 void XGBoostModel::finalizeTrainingImpl()
 {
-    if (n_rows == 0)
+    if (ingested_rows == 0)
         throw Exception(ErrorCodes::XGBOOST_ERROR, "No training data was provided");
 
 
-    assert(labels.size() == n_rows);
-    assert(flattened_features.size() == n_rows * n_features);
+    assert(labels.size() == ingested_rows);
+    assert(flattened_features.size() == ingested_rows * n_features);
 
-    throwOnError(XGDMatrixCreateFromMat(flattened_features.data(), n_rows, n_features, 0, &dmatrix));
+    // Create the DMatrix
+    throwOnError(XGDMatrixCreateFromMat(flattened_features.data(), ingested_rows, n_features, 0, &dmatrix));
 
+    // Create the model
     throwOnError(XGBoosterCreate(&dmatrix, 1, &booster));
 
-    throwOnError(XGDMatrixSetFloatInfo(dmatrix, "label", labels.data(), n_rows));
+    // Set the label for each row
+    throwOnError(XGDMatrixSetFloatInfo(dmatrix, "label", labels.data(), ingested_rows));
 
+    // Sets the parameters provided by the user
+    // TODO: dont accept everything the user provided
     for (const auto & [key, value] : hps){
         throwOnError(XGBoosterSetParam(booster, key.c_str(), value.c_str()));
     }
@@ -120,6 +146,7 @@ void XGBoostModel::finalizeTrainingImpl()
     if (auto it = hps.find("n_estimators"); it != hps.end())
         n_iter = std::stoi(it->second);
 
+    // Train the model
     for (int i = 0; i < n_iter; ++i){
         throwOnError(XGBoosterUpdateOneIter(booster, i, dmatrix));
     }
@@ -136,9 +163,6 @@ void XGBoostModel::finalizeTrainingImpl()
 
 ColumnPtr XGBoostModel::predictImpl(const Block & batch)
 {
-    bst_ulong out_len {0};
-    const float* out_result {nullptr};
-
     if(batch.columns() != n_features){
         throw Exception(
             ErrorCodes::XGBOOST_ERROR,
@@ -165,20 +189,38 @@ ColumnPtr XGBoostModel::predictImpl(const Block & batch)
     }
 
     DMatrixHandle predict_dmatrix {nullptr};
+    SCOPE_EXIT({
+        if (predict_dmatrix)
+        {
+            XGDMatrixFree(predict_dmatrix);
+        }
+    });
+
     throwOnError(XGDMatrixCreateFromMat(features.data(), rows, n_features, 0, &predict_dmatrix));
-    SCOPE_EXIT({ XGDMatrixFree(predict_dmatrix); });
 
     auto result = ColumnFloat64::create();
 
     {
-        /// XGBoosterPredict writes into a prediction buffer owned by the booster
-        /// and returns a pointer into it, so the call and the copy-out below must
-        /// be serialized against concurrent predictions on the same model.
         std::lock_guard lock(predict_mutex);
 
-        throwOnError(XGBoosterPredict(
-            booster, predict_dmatrix, 0, 0,
-            0, &out_len, &out_result));
+        /* Shape of output prediction */
+        bst_ulong const * out_shape{nullptr};
+        /* Dimension of output prediction */
+        bst_ulong out_dim {0};
+        /* Pointer to a thread local contiguous array, assigned in prediction function. */
+        float const * out_result{nullptr};
+
+        char const config[] =
+        "{\"training\": false, \"type\": 0, "
+        "\"iteration_begin\": 0, \"iteration_end\": 0, \"strict_shape\": false}";
+
+        throwOnError(
+            XGBoosterPredictFromDMatrix(booster, predict_dmatrix, config, &out_shape, &out_dim, &out_result)
+        );
+
+        size_t out_len = 1;
+        for (uint64_t i = 0; i < out_dim; ++i)
+            out_len *= out_shape[i];
 
         // Should have predicted the number of inputted rows
         assert(rows == out_len);
