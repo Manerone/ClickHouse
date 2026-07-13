@@ -66,7 +66,7 @@ void TableFunctionPredict::parseArguments(const ASTPtr & ast_function, ContextPt
         auto table_ast = table_id_ast->createTable();
         if (!table_ast)
             throw Exception(ErrorCodes::BAD_ARGUMENTS,
-                "Table function '{}': '{}' is not a valid table name", getName(), id.name());
+                "Table function '{}': '{}' is not a valid table name", getName(), table_id_ast->name());
 
         table_id = table_ast->getTableId();       // {db, table}; db empty if not qualified
     }
