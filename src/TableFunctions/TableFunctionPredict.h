@@ -1,12 +1,14 @@
 #pragma once
 
-#include <optional>
+#include <unordered_map>
 
 #include <Interpreters/StorageID.h>
+#include <Models/Model_fwd.h>
 #include <TableFunctions/ITableFunction.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <Storages/StorageMemory.h>
 #include <Storages/MemorySettings.h>
+#include <base/types.h>
 
 namespace DB
 {
@@ -42,6 +44,7 @@ private:
 
     String model_name;
     StorageID table_id = StorageID::createEmpty();
+    PredictParameters predict_params;
 };
 
 }

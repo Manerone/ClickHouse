@@ -1,4 +1,5 @@
 #include <Models/IModel.h>
+#include <Models/Model_fwd.h>
 
 #include <Common/Exception.h>
 
@@ -42,14 +43,14 @@ void IModel::finalizeTraining()
     model_state = ModelState::Trained;
 }
 
-ColumnPtr IModel::predict(const Block & batch)
+ColumnPtr IModel::predict(const Block & batch, const PredictParameters & params)
 {
     if (model_state != ModelState::Trained)
         throw Exception(
             ErrorCodes::LOGICAL_ERROR,
             "predict called on a model that has not finished training");
 
-    return predictImpl(batch);
+    return predictImpl(batch, params);
 }
 
 }

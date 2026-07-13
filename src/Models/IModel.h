@@ -46,7 +46,7 @@ public:
 
     /// Predict on a batch of feature rows. Returns a Float64 column of
     /// predictions with one element per row of `batch`.
-    ColumnPtr predict(const Block & batch);
+    ColumnPtr predict(const Block & batch, const PredictParameters & params);
 
     ModelState state() const { return model_state; }
 
@@ -63,7 +63,7 @@ protected:
     virtual void startTrainingImpl(const Block & header, const String & target_column) = 0;
     virtual void addTrainingDataImpl(const Block & batch) = 0;
     virtual void finalizeTrainingImpl() = 0;
-    virtual ColumnPtr predictImpl(const Block & batch) = 0;
+    virtual ColumnPtr predictImpl(const Block & batch, const PredictParameters & params) = 0;
 
 private:
     ModelState model_state = ModelState::Created;

@@ -27,49 +27,6 @@ namespace ErrorCodes
     extern const int BAD_TYPE_OF_FIELD;
 }
 
-namespace
-{
-
-HyperParameters getHyperParameters(ASTPtr options_ptr)
-{
-    if (!options_ptr)
-        return {};
-
-    ASTSetQuery* options = options_ptr->as<ASTSetQuery>();
-
-    HyperParameters hyper_parameters;
-
-    for (const auto& pair: options->changes)
-    {
-        const auto type = pair.value.getType();
-        String value;
-
-        switch (type)
-        {
-            case Field::Types::Which::UInt64:
-            case Field::Types::Which::Int64:
-                value = toString(pair.value.safeGet<UInt64>());
-                break;
-            case Field::Types::Which::Float64:
-                value = toString(pair.value.safeGet<Float64>());
-                break;
-            case Field::Types::Which::String:
-                value = pair.value.safeGet<String>();
-                break;
-            default:
-                throw Exception(
-                    ErrorCodes::BAD_TYPE_OF_FIELD,
-                    "Unsupported field type {} for field {}", type, pair.name);
-
-        }
-        hyper_parameters[pair.name] = std::move(value);
-    }
-
-    return hyper_parameters;
-}
-
-}
-
 BlockIO InterpreterCreateModelQuery::execute()
 {
     auto context = getContext();
@@ -81,7 +38,7 @@ BlockIO InterpreterCreateModelQuery::execute()
 
     const String model_name = create_model_query.model_name->as<ASTIdentifier>()->name();
     const String algorithm = create_model_query.algorithm->as<ASTLiteral>()->value.safeGet<String>();
-    const HyperParameters hyper_parameters = getHyperParameters(create_model_query.options);
+    const HyperParameters hyper_parameters = create_model_query.options->as<ASTLiteral>()->value.safeGet<String>();
     const String target_name = create_model_query.target->as<ASTLiteral>()->value.safeGet<String>();
     const String table_name = create_model_query.table_name->as<ASTIdentifier>()->name();
 

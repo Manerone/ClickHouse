@@ -1,9 +1,12 @@
 #include <Core/ColumnWithTypeAndName.h>
 #include <DataTypes/IDataType.h>
+#include <IO/ReadHelpers.h>
+#include <Models/Model_fwd.h>
 #include <Models/XGBoostModel.h>
 
 #include <Common/Exception.h>
 #include <Common/scope_guard_safe.h>
+#include <IO/ReadHelpers.h>
 #include <Core/Block.h>
 #include <Columns/IColumn.h>
 #include <Columns/ColumnsNumber.h>
@@ -12,6 +15,11 @@
 #include <xgboost/c_api.h>
 
 #include <fmt/format.h>
+#include <Poco/JSON/Object.h>
+#include <Poco/JSON/Parser.h>
+
+#include <unordered_map>
+#include <unordered_set>
 
 namespace DB
 {
@@ -134,20 +142,15 @@ void XGBoostModel::finalizeTrainingImpl()
     // Set the label for each row
     throwOnError(XGDMatrixSetFloatInfo(dmatrix, "label", labels.data(), ingested_rows));
 
-    // Sets the parameters provided by the user
-    // TODO: dont accept everything the user provided
-    for (const auto & [key, value] : hps){
+    // Validate the parameters provided by the user
+    const auto params = sanitizeTrainingParams(hps);
+
+    for (const auto & [key, value] : params){
         throwOnError(XGBoosterSetParam(booster, key.c_str(), value.c_str()));
     }
 
-    int n_iter = 100;
-    if (auto it = hps.find("num_iterations"); it != hps.end())
-        n_iter = std::stoi(it->second);
-    if (auto it = hps.find("n_estimators"); it != hps.end())
-        n_iter = std::stoi(it->second);
-
     // Train the model
-    for (int i = 0; i < n_iter; ++i){
+    for (int i = 0; i < num_iterations; ++i){
         throwOnError(XGBoosterUpdateOneIter(booster, i, dmatrix));
     }
 
@@ -161,7 +164,7 @@ void XGBoostModel::finalizeTrainingImpl()
     labels.shrink_to_fit();
 }
 
-ColumnPtr XGBoostModel::predictImpl(const Block & batch)
+ColumnPtr XGBoostModel::predictImpl(const Block & batch, const PredictParameters & params)
 {
     if(batch.columns() != n_features){
         throw Exception(
@@ -210,12 +213,10 @@ ColumnPtr XGBoostModel::predictImpl(const Block & batch)
         /* Pointer to a thread local contiguous array, assigned in prediction function. */
         float const * out_result{nullptr};
 
-        char const config[] =
-        "{\"training\": false, \"type\": 0, "
-        "\"iteration_begin\": 0, \"iteration_end\": 0, \"strict_shape\": false}";
+        String config = sanitizePredictParams(params);
 
         throwOnError(
-            XGBoosterPredictFromDMatrix(booster, predict_dmatrix, config, &out_shape, &out_dim, &out_result)
+            XGBoosterPredictFromDMatrix(booster, predict_dmatrix, config.c_str(), &out_shape, &out_dim, &out_result)
         );
 
         size_t out_len = 1;
@@ -232,5 +233,126 @@ ColumnPtr XGBoostModel::predictImpl(const Block & batch)
     }
 
     return result;
+}
+
+std::unordered_map<String, String> XGBoostModel::sanitizeTrainingParams(const HyperParameters & params)
+{
+    std::unordered_map<String, String> sanitized;
+
+    if (params.empty())
+        return sanitized;
+
+    static const std::unordered_set<String> allowed_keys{
+        "booster",
+        "objective",
+        "eval_metric",
+        "seed",
+        "verbosity",
+        "nthread",
+        "eta",
+        "learning_rate",
+        "gamma",
+        "max_depth",
+        "min_child_weight",
+        "max_delta_step",
+        "subsample",
+        "sampling_method",
+        "colsample_bytree",
+        "colsample_bylevel",
+        "colsample_bynode",
+        "lambda",
+        "reg_lambda",
+        "alpha",
+        "reg_alpha",
+        "tree_method",
+        "scale_pos_weight",
+        "grow_policy",
+        "max_leaves",
+        "max_bin",
+        "num_parallel_tree",
+        "num_iterations"};
+
+    Poco::JSON::Parser parser;
+    Poco::Dynamic::Var parsed;
+    try
+    {
+        parsed = parser.parse(params);
+    }
+    catch (const Poco::Exception & e)
+    {
+        throw Exception(
+            ErrorCodes::XGBOOST_ERROR, "Training parameters are not valid JSON: {}", e.displayText());
+    }
+
+    const auto & object = parsed.extract<Poco::JSON::Object::Ptr>();
+    if (object.isNull())
+        throw Exception(ErrorCodes::XGBOOST_ERROR, "Training parameters must be a JSON object");
+
+    for (const auto & [key, value] : *object)
+    {
+        if (!allowed_keys.contains(key))
+            throw Exception(
+                ErrorCodes::XGBOOST_ERROR, "Unknown or forbidden training parameter '{}'", key);
+        // If we found num_iterations, record this value and do not add it to the final map
+        if (key == "num_iterations")
+        {
+            int parsed_iterations = 0;
+            if (!tryParse(parsed_iterations, value.toString()) || parsed_iterations <= 0)
+                throw Exception(
+                    ErrorCodes::XGBOOST_ERROR, "Parameter 'num_iterations' must be a positive integer, got '{}'", value.toString());
+            num_iterations = parsed_iterations;
+        }
+        else
+        {
+            sanitized.emplace(key, value.toString());
+        }
+    }
+
+    return sanitized;
+}
+
+String XGBoostModel::sanitizePredictParams(const PredictParameters & params)
+{
+    // Default parameters
+    Poco::JSON::Object config;
+    config.set("type", 0);
+    config.set("iteration_begin", 0);
+    config.set("iteration_end", 0);
+    config.set("strict_shape", false);
+    config.set("training", false);
+
+    if (!params.empty())
+    {
+        static const std::unordered_set<String> allowed_keys{
+            "type", "iteration_begin", "iteration_end", "strict_shape", "ntree_limit"};
+
+        Poco::JSON::Parser parser;
+        Poco::Dynamic::Var parsed;
+        try
+        {
+            parsed = parser.parse(params);
+        }
+        catch (const Poco::Exception & e)
+        {
+            throw Exception(
+                ErrorCodes::XGBOOST_ERROR, "Prediction parameters are not valid JSON: {}", e.displayText());
+        }
+
+        const auto & object = parsed.extract<Poco::JSON::Object::Ptr>();
+        if (object.isNull())
+            throw Exception(ErrorCodes::XGBOOST_ERROR, "Prediction parameters must be a JSON object");
+
+        for (const auto & [key, value] : *object)
+        {
+            if (!allowed_keys.contains(key))
+                throw Exception(
+                    ErrorCodes::XGBOOST_ERROR, "Unknown or forbidden prediction parameter '{}'", key);
+            config.set(key, value);
+        }
+    }
+
+    std::ostringstream oss;
+    config.stringify(oss);
+    return oss.str();
 }
 }

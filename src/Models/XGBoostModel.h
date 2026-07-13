@@ -1,9 +1,11 @@
 #pragma once
 
 #include <Models/IModel.h>
+#include <Models/Model_fwd.h>
 #include <xgboost/c_api.h>
 
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 namespace DB
@@ -27,15 +29,19 @@ protected:
     void startTrainingImpl(const Block & header, const String & target_column_) override;
     void addTrainingDataImpl(const Block & batch) override;
     void finalizeTrainingImpl() override;
-    ColumnPtr predictImpl(const Block & batch) override;
+    ColumnPtr predictImpl(const Block & batch, const PredictParameters & params) override;
 
 private:
     void throwIfTypeIsInvalid(const ColumnWithTypeAndName &col);
+
+    std::unordered_map<String, String> sanitizeTrainingParams(const HyperParameters & params);
+    String sanitizePredictParams(const PredictParameters & params);
 
     BoosterHandle booster {nullptr};
     DMatrixHandle dmatrix {nullptr};
 
     HyperParameters hps;
+    int num_iterations {100};
 
     /// Target column
     String target_column;

@@ -1,3 +1,4 @@
+#include <Parsers/ASTLiteral.h>
 #include <TableFunctions/TableFunctionPredict.h>
 
 #include <Parsers/ASTIdentifier.h>
@@ -18,7 +19,6 @@
 
 namespace DB
 {
-
 
 namespace ErrorCodes
 {
@@ -46,28 +46,41 @@ void TableFunctionPredict::parseArguments(const ASTPtr & ast_function, ContextPt
         throw Exception(ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH, "Table function '{}' must have arguments", getName());
 
     const ASTs & args = args_func[0]->children;
-    if (args.size() != 2)
-            throw Exception(ErrorCodes::BAD_ARGUMENTS,
-                "Table function '{}' expects 'model, table' arguments", getName());
 
-    const auto * model_ast_id = args[0]->as<ASTIdentifier>();
+    if (args.size() != 2 && args.size() != 3)
+            throw Exception(ErrorCodes::BAD_ARGUMENTS,
+                "Table function '{}' expects 'model, table[, params_json]' arguments", getName());
+
     const auto * table_id_ast = args[1]->as<ASTIdentifier>();
+    const auto * model_ast_id = args[0]->as<ASTIdentifier>();
+
     if (!model_ast_id || !table_id_ast)
         throw Exception(ErrorCodes::BAD_ARGUMENTS,
             "Table function '{}' expects 'model, table' arguments", getName());
 
-    auto to_table_id = [&](const ASTIdentifier & id) -> StorageID
+    // Get model name
+    model_name = model_ast_id->name();
+
+    // Get qualified table name (e.g., db.table_name)
     {
-        auto table_ast = id.createTable();
+        auto table_ast = table_id_ast->createTable();
         if (!table_ast)
             throw Exception(ErrorCodes::BAD_ARGUMENTS,
                 "Table function '{}': '{}' is not a valid table name", getName(), id.name());
 
-        return table_ast->getTableId();       // {db, table}; db empty if not qualified
-    };
+        table_id = table_ast->getTableId();       // {db, table}; db empty if not qualified
+    }
 
-    model_name = model_ast_id->name();
-    table_id = to_table_id(*table_id_ast);
+    // Get parameters
+    if(args.size() > 2){
+        const auto * literal = args[2]->as<ASTLiteral>();
+        if(!literal || literal->value.getType() != Field::Types::String){
+            throw Exception(ErrorCodes::BAD_ARGUMENTS,
+            "Table function '{}': third argument must be a JSON string literal", getName());
+        }
+        predict_params = literal->value.safeGet<String>();
+    }
+
 }
 
 StoragePtr TableFunctionPredict::executeImpl(
@@ -100,7 +113,7 @@ StoragePtr TableFunctionPredict::executeImpl(
     {
         if (block.rows() == 0)
             continue;
-        ColumnPtr batch_predictions = model->predict(block);
+        ColumnPtr batch_predictions = model->predict(block, predict_params);
         col->insertRangeFrom(*batch_predictions, 0, batch_predictions->size());
     }
 
