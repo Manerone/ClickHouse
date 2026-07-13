@@ -13,50 +13,50 @@ bool ParserCreateModelQuery::parseImpl(IParser::Pos & pos, ASTPtr & node, Expect
 {
     auto model = make_intrusive<ASTCreateModelQuery>();
 
-    ParserKeyword s_create(Keyword::CREATE);
-    ParserKeyword s_model(Keyword::MODEL);
-    ParserKeyword s_algorithm(Keyword::ALGORITHM);
-    ParserKeyword s_options(Keyword::OPTIONS);
-    ParserKeyword s_target(Keyword::TARGET);
-    ParserKeyword s_from(Keyword::FROM);
-    ParserKeyword s_table(Keyword::TABLE);
+    ParserKeyword keyword_create(Keyword::CREATE);
+    ParserKeyword keyword_model(Keyword::MODEL);
+    ParserKeyword keyword_algorithm(Keyword::ALGORITHM);
+    ParserKeyword keyword_options(Keyword::OPTIONS);
+    ParserKeyword keyword_target(Keyword::TARGET);
+    ParserKeyword keyword_from(Keyword::FROM);
+    ParserKeyword keyword_table(Keyword::TABLE);
 
-    ParserCompoundIdentifier model_name_p;
-    ParserStringLiteral algorithm_p;
-    ParserSetQuery options_p(true);
-    ParserStringLiteral target_p;
-    ParserCompoundIdentifier table_name_p;
+    ParserCompoundIdentifier model_name_parameter;
+    ParserStringLiteral algorithm_parameter;
+    ParserSetQuery options_parameter(true);
+    ParserStringLiteral target_parameter;
+    ParserCompoundIdentifier table_name_parameter;
 
     // CREATE MODEL
 
-    if (!s_create.ignore(pos, expected))
+    if (!keyword_create.ignore(pos, expected))
         return false;
 
-    if (!s_model.ignore(pos, expected))
+    if (!keyword_model.ignore(pos, expected))
         return false;
 
     ASTPtr model_name;
-    if (!model_name_p.parse(pos, model_name, expected))
+    if (!model_name_parameter.parse(pos, model_name, expected))
         return false;
 
     // ALGORITHM
 
-    if (!s_algorithm.ignore(pos, expected))
+    if (!keyword_algorithm.ignore(pos, expected))
         return false;
 
     ASTPtr algorithm;
-    if (!algorithm_p.parse(pos, algorithm, expected))
+    if (!algorithm_parameter.parse(pos, algorithm, expected))
         return false;
 
     // OPTIONS (optional field)
 
     ASTPtr options;
-    if (s_options.ignore(pos, expected))
+    if (keyword_options.ignore(pos, expected))
     {
         if (!ParserToken(TokenType::OpeningRoundBracket).ignore(pos, expected))
             return false;
 
-        if (!options_p.parse(pos, options, expected))
+        if (!options_parameter.parse(pos, options, expected))
             return false;
 
         if (!ParserToken(TokenType::ClosingRoundBracket).ignore(pos, expected))
@@ -65,28 +65,24 @@ bool ParserCreateModelQuery::parseImpl(IParser::Pos & pos, ASTPtr & node, Expect
 
     // TARGET
 
-    if (!s_target.ignore(pos, expected))
+    if (!keyword_target.ignore(pos, expected))
         return false;
 
     ASTPtr target;
-    if (!target_p.parse(pos, target, expected))
+    if (!target_parameter.parse(pos, target, expected))
         return false;
 
     // FROM TABLE
 
-    if (!s_from.ignore(pos, expected))
+    if (!keyword_from.ignore(pos, expected))
         return false;
 
-    // TODO: Add tableFunctions here
-
-    if (!s_table.ignore(pos, expected))
+    if (!keyword_table.ignore(pos, expected))
         return false;
 
     ASTPtr table_name;
-    if (!table_name_p.parse(pos, table_name, expected))
+    if (!table_name_parameter.parse(pos, table_name, expected))
         return false;
-
-    // OK
 
     model->model_name = model_name;
     model->algorithm = algorithm;

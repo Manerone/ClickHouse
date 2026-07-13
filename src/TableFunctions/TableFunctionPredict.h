@@ -2,6 +2,7 @@
 
 #include <optional>
 
+#include <Interpreters/StorageID.h>
 #include <TableFunctions/ITableFunction.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <Storages/StorageMemory.h>
@@ -40,7 +41,7 @@ private:
     const char * getStorageEngineName() const override { return ""; }
 
     String model_name;
-    String table_name;
+    StorageID table_id = StorageID::createEmpty();
 };
 
 }

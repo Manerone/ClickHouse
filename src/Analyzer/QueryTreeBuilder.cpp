@@ -919,15 +919,6 @@ std::shared_ptr<TableFunctionNode> QueryTreeBuilder::buildTableFunction(const AS
                 node->getArguments().getNodes().push_back(buildSelectOrUnionExpression(argument, false /*is_subquery*/, {} /*cte_name*/, nullptr /*aliases*/, context));
             else if (const auto * ast_set = argument->as<ASTSetQuery>())
                 node->setSettingsChanges(ast_set->changes);
-            else if (const auto * predict_query = argument->as<ASTPredictQuery>())
-            {
-                /// `predict(MODEL model, TABLE table)` carries its model and table names inside a
-                /// single ASTPredictQuery node. Expand it into two plain identifier arguments; their
-                /// analysis is skipped (see TableFunctionPredict::skipAnalysisForArguments) so they
-                /// are not resolved as expressions.
-                node->getArguments().getNodes().push_back(buildExpression(predict_query->model_name, context));
-                node->getArguments().getNodes().push_back(buildExpression(predict_query->table_name, context));
-            }
             else
                 node->getArguments().getNodes().push_back(buildExpression(argument, context));
         }

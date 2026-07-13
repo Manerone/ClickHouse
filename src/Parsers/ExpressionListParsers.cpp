@@ -24,7 +24,6 @@
 #include <Parsers/ASTSetQuery.h>
 #include <Parsers/ASTSelectWithUnionQuery.h>
 #include <Parsers/ASTSubquery.h>
-#include <Parsers/ASTPredictQuery.h>
 #include <Parsers/ASTTablesInSelectQuery.h>
 #include <Parsers/ParserCreateQuery.h>
 #include <Parsers/ParserUnionQueryElement.h>
@@ -2017,42 +2016,43 @@ public:
         /// PREDICT(MODEL model_name, TABLE table_name)
         /// Parse whole function here, no state-machine based-parsing
 
-        ParserKeyword s_model(Keyword::MODEL);
-        ParserKeyword s_table(Keyword::TABLE);
+        ParserKeyword keyword_model(Keyword::MODEL);
+        ParserKeyword keyword_table(Keyword::TABLE);
 
-        ParserCompoundIdentifier model_p;
-        ParserCompoundIdentifier table_p;
+        ParserCompoundIdentifier model_parameter;
+        ParserCompoundIdentifier table_parameter;
 
-        if (!s_model.ignore(pos, expected)) {
+        if (!keyword_model.ignore(pos, expected))
+        {
             return false;
         }
 
         ASTPtr model_name;
-        if (!model_p.parse(pos, model_name, expected)) {
+        if (!model_parameter.parse(pos, model_name, expected))
+        {
             return false;
         }
 
-        if (!ParserToken(TokenType::Comma).ignore(pos, expected)) {
+        if (!ParserToken(TokenType::Comma).ignore(pos, expected))
+        {
             return false;
         }
 
-        if (!s_table.ignore(pos, expected)) {
+        if (!keyword_table.ignore(pos, expected))
+        {
             return false;
         }
 
         ASTPtr table_name;
-        if (!table_p.parse(pos, table_name, expected)) {
+        if (!table_parameter.parse(pos, table_name, expected))
+        {
             return false;
         }
 
         if (!ParserToken(TokenType::ClosingRoundBracket).ignore(pos, expected))
             return false;
 
-        auto predict = make_intrusive<ASTPredictQuery>();
-        predict->model_name = model_name;
-        predict->table_name = table_name;
-
-        elements = {makeASTFunction("predict", predict)};
+        elements = {makeASTFunction("predict", model_name, table_name)};
 
         finished = true;
         return true;

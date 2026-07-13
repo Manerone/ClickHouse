@@ -18,6 +18,8 @@ public:
 
     ASTPtr clone() const override;
 
+    QueryKind getQueryKind() const override { return QueryKind::Create; }
+
 protected:
     void formatImpl(WriteBuffer & ostr, const FormatSettings & format_settings, FormatState & state, FormatStateStacked frame) const override;
 };

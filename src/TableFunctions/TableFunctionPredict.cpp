@@ -1,6 +1,5 @@
 #include <TableFunctions/TableFunctionPredict.h>
 
-#include <Parsers/ASTPredictQuery.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Analyzer/TableFunctionNode.h>
 #include <DataTypes/DataTypeString.h>
@@ -47,34 +46,28 @@ void TableFunctionPredict::parseArguments(const ASTPtr & ast_function, ContextPt
         throw Exception(ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH, "Table function '{}' must have arguments", getName());
 
     const ASTs & args = args_func[0]->children;
-
-    /// Two shapes reach here: the AST produced directly by the parser wraps the model and table
-    /// names in a single ASTPredictQuery node; the AST reconstructed by the analyzer from the
-    /// query tree carries them as two plain identifier arguments.
-    if (args.size() == 1)
-    {
-        const auto * predict = args[0]->as<ASTPredictQuery>();
-        if (!predict)
+    if (args.size() != 2)
             throw Exception(ErrorCodes::BAD_ARGUMENTS,
                 "Table function '{}' expects 'MODEL model, TABLE table' arguments", getName());
 
-        model_name = predict->model_name->as<ASTIdentifier>()->name();
-        table_name = predict->table_name->as<ASTIdentifier>()->name();
-    }
-    else if (args.size() == 2)
-    {
-        const auto * model_id = args[0]->as<ASTIdentifier>();
-        const auto * table_id = args[1]->as<ASTIdentifier>();
-        if (!model_id || !table_id)
-            throw Exception(ErrorCodes::BAD_ARGUMENTS,
-                "Table function '{}' expects 'MODEL model, TABLE table' arguments", getName());
+    const auto * model_ast_id = args[0]->as<ASTIdentifier>();
+    const auto * table_id_ast = args[1]->as<ASTIdentifier>();
+    if (!model_ast_id || !table_id_ast)
+        throw Exception(ErrorCodes::BAD_ARGUMENTS,
+            "Table function '{}' expects 'MODEL model, TABLE table' arguments", getName());
 
-        model_name = model_id->name();
-        table_name = table_id->name();
-    }
-    else
-        throw Exception(ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH,
-            "Table function '{}' must have arguments", getName());
+    auto to_table_id = [&](const ASTIdentifier & id) -> StorageID
+    {
+        auto table_ast = id.createTable();
+        if (!table_ast)
+            throw Exception(ErrorCodes::BAD_ARGUMENTS,
+                "Table function '{}': '{}' is not a valid table name", getName(), id.name());
+
+        return table_ast->getTableId();       // {db, table}; db empty if not qualified
+    };
+
+    model_name = model_ast_id->name();
+    table_id = to_table_id(*table_id_ast);
 }
 
 StoragePtr TableFunctionPredict::executeImpl(
@@ -84,8 +77,8 @@ StoragePtr TableFunctionPredict::executeImpl(
     ColumnsDescription /*cached_columns*/,
     bool) const
 {
-    StorageID table_id{context->getCurrentDatabase(), table_name};
-    StoragePtr storage = DatabaseCatalog::instance().getTable(table_id, context);
+    auto resolved_id = context->resolveStorageID(table_id);   // fills current DB if empty
+    StoragePtr storage = DatabaseCatalog::instance().getTable(resolved_id, context);
 
     /// Run the input query on a separate context with its own query id, so it
     /// does not collide in the process list with the outer query that invoked
@@ -94,7 +87,7 @@ StoragePtr TableFunctionPredict::executeImpl(
     /// in effect).
     auto ctx = Context::createCopy(context);
     ctx->setCurrentQueryId("");
-    auto io = executeQuery("SELECT * FROM " + table_name, ctx, QueryFlags{ .internal = true }, QueryProcessingStage::Complete).second;
+    auto io = executeQuery("SELECT * FROM " + resolved_id.getFullTableName(), ctx, QueryFlags{ .internal = true }, QueryProcessingStage::Complete).second;
     PullingPipelineExecutor executor(io.pipeline);
 
     auto model = ModelRegistry::instance().getModel(model_name);
@@ -133,7 +126,7 @@ void registerTableFunctionPredict(TableFunctionFactory & factory)
     factory.registerFunction<TableFunctionPredict>(
         FunctionDocumentation{
             .description = "Runs model's predictions on the input table",
-            .returned_value = {"A table containing a single row - predicted target values of the model"},
+            .returned_value = {"A table containing a prediction per input row"},
             .category = FunctionDocumentation::Category::TableFunction},
         TableFunctionProperties{.allow_readonly = true});
 }
