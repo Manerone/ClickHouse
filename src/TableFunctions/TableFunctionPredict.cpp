@@ -48,13 +48,13 @@ void TableFunctionPredict::parseArguments(const ASTPtr & ast_function, ContextPt
     const ASTs & args = args_func[0]->children;
     if (args.size() != 2)
             throw Exception(ErrorCodes::BAD_ARGUMENTS,
-                "Table function '{}' expects 'MODEL model, TABLE table' arguments", getName());
+                "Table function '{}' expects 'model, table' arguments", getName());
 
     const auto * model_ast_id = args[0]->as<ASTIdentifier>();
     const auto * table_id_ast = args[1]->as<ASTIdentifier>();
     if (!model_ast_id || !table_id_ast)
         throw Exception(ErrorCodes::BAD_ARGUMENTS,
-            "Table function '{}' expects 'MODEL model, TABLE table' arguments", getName());
+            "Table function '{}' expects 'model, table' arguments", getName());
 
     auto to_table_id = [&](const ASTIdentifier & id) -> StorageID
     {

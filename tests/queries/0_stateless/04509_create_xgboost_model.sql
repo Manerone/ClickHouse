@@ -52,9 +52,9 @@ SELECT number AS x1, number * 2 AS x2 FROM numbers(10);
 -- The predict table function yields one Float64 column named `prediction`,
 -- one row per input row. Exact XGBoost outputs are platform-dependent, so we
 -- only assert deterministic, structural properties here.
-SELECT count() FROM predict(MODEL model_04509_xgb, TABLE inference_04509);
-SELECT any(toTypeName(prediction)) FROM predict(MODEL model_04509_xgb, TABLE inference_04509);
-SELECT countIf(NOT isFinite(prediction)) FROM predict(MODEL model_04509_xgb, TABLE inference_04509);
+SELECT count() FROM predict(model_04509_xgb, inference_04509);
+SELECT any(toTypeName(prediction)) FROM predict(model_04509_xgb, inference_04509);
+SELECT countIf(NOT isFinite(prediction)) FROM predict(model_04509_xgb, inference_04509);
 
 -- OPTIONS is optional: train again with default hyper-parameters.
 DROP MODEL model_04509_xgb;
@@ -63,7 +63,7 @@ ALGORITHM 'xgboost'
 TARGET 'y'
 FROM TABLE training_04509;
 
-SELECT count() FROM predict(MODEL model_04509_xgb, TABLE inference_04509);
+SELECT count() FROM predict(model_04509_xgb, inference_04509);
 
 -- Error: unknown algorithm.
 CREATE MODEL model_04509_missing
@@ -90,10 +90,10 @@ TARGET 'y'
 FROM TABLE training_04509; -- { serverError MODEL_ALREADY_EXISTS }
 
 -- Error: predicting against a model that does not exist.
-SELECT count() FROM predict(MODEL model_04509_missing, TABLE inference_04509); -- { serverError MODEL_NOT_FOUND }
+SELECT count() FROM predict(model_04509_missing, inference_04509); -- { serverError MODEL_NOT_FOUND }
 
 -- Error: feature count mismatch (the target column is present in the input).
-SELECT count() FROM predict(MODEL model_04509_xgb, TABLE training_04509); -- { serverError XGBOOST_ERROR }
+SELECT count() FROM predict(model_04509_xgb, training_04509); -- { serverError XGBOOST_ERROR }
 
 -- DROP MODEL removes it; IF EXISTS makes a repeated drop a no-op.
 DROP MODEL model_04509_xgb;
