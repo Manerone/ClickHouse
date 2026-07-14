@@ -32,7 +32,7 @@ namespace ErrorCodes
 
 namespace {
 
-// Transforms the options parameter into a valid json
+// Serializes the options parameter into a valid json string
 String serializeOptions(ASTPtr options)
 {
     if (!options)
