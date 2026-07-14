@@ -57,11 +57,11 @@ OPTIONS (max_depth = 4, eta = 0.3, objective = 'reg:squarederror', num_iteration
 TARGET 'y'
 FROM TABLE training_04509;
 
--- The predict table function yields one Float64 column named `prediction`,
--- one row per input row. Exact XGBoost outputs are platform-dependent,
--- only assert deterministic, structural properties here.
-SELECT count() FROM predict(model_04509_xgb, inference_04509);
-SELECT any(toTypeName(prediction)) FROM predict(model_04509_xgb, inference_04509);
+-- `predict` is a row-wise function returning one Float64 per input row. Exact
+-- XGBoost outputs are platform-dependent, only assert deterministic, structural
+-- properties here.
+SELECT count(predict('model_04509_xgb', x1, x2)) FROM inference_04509;
+SELECT any(toTypeName(predict('model_04509_xgb', x1, x2))) FROM inference_04509;
 
 -- ============================================================================
 -- Positive: training with default hyper-parameters
@@ -74,39 +74,39 @@ ALGORITHM 'xgboost'
 TARGET 'y'
 FROM TABLE training_04509;
 
-SELECT count() FROM predict(model_04509_xgb, inference_04509);
+SELECT count(predict('model_04509_xgb', x1, x2)) FROM inference_04509;
 
 -- ============================================================================
 -- Positive: predict with prediction parameters
 -- ============================================================================
 
--- Predict with an explicit (valid) prediction-parameters JSON as the third
+-- Predict with an explicit (valid) prediction-parameters JSON as the trailing
 -- argument. Same deterministic, structural assertions as above.
-SELECT count() FROM predict(model_04509_xgb, inference_04509, '{"iteration_begin": 0, "iteration_end": 0}');
-SELECT count() FROM predict(model_04509_xgb, inference_04509, '{"type": 0}');
-SELECT any(toTypeName(prediction)) FROM predict(model_04509_xgb, inference_04509, '{"type": 0}');
+SELECT count(predict('model_04509_xgb', x1, x2, '{"iteration_begin": 0, "iteration_end": 0}')) FROM inference_04509;
+SELECT count(predict('model_04509_xgb', x1, x2, '{"type": 0}')) FROM inference_04509;
+SELECT any(toTypeName(predict('model_04509_xgb', x1, x2, '{"type": 0}'))) FROM inference_04509;
 
 -- ============================================================================
 -- Negative: prediction parameters
 -- ============================================================================
 
 -- Error: unknown/forbidden prediction parameter.
-SELECT count() FROM predict(model_04509_xgb, inference_04509, '{"not_a_predict_param": 1}'); -- { serverError XGBOOST_ERROR }
+SELECT count(predict('model_04509_xgb', x1, x2, '{"not_a_predict_param": 1}')) FROM inference_04509; -- { serverError XGBOOST_ERROR }
 
 -- Error: prediction parameters are not valid JSON.
-SELECT count() FROM predict(model_04509_xgb, inference_04509, 'not a json'); -- { serverError XGBOOST_ERROR }
+SELECT count(predict('model_04509_xgb', x1, x2, 'not a json')) FROM inference_04509; -- { serverError XGBOOST_ERROR }
 
 -- Error: prediction parameters are valid JSON but not a JSON object.
-SELECT count() FROM predict(model_04509_xgb, inference_04509, '123'); -- { serverError XGBOOST_ERROR }
+SELECT count(predict('model_04509_xgb', x1, x2, '123')) FROM inference_04509; -- { serverError XGBOOST_ERROR }
 
--- Error: the third argument must be a JSON string literal.
-SELECT count() FROM predict(model_04509_xgb, inference_04509, 123); -- { serverError BAD_ARGUMENTS }
+-- Error: a feature argument is not numeric.
+SELECT count(predict('model_04509_xgb', toString(x1), x2)) FROM inference_04509; -- { serverError ILLEGAL_TYPE_OF_ARGUMENT }
 
 -- Error: predicting against a model that does not exist.
-SELECT count() FROM predict(model_04509_missing, inference_04509); -- { serverError MODEL_NOT_FOUND }
+SELECT count(predict('model_04509_missing', x1, x2)) FROM inference_04509; -- { serverError MODEL_NOT_FOUND }
 
--- Error: feature count mismatch (the target column is present in the input).
-SELECT count() FROM predict(model_04509_xgb, training_04509); -- { serverError XGBOOST_ERROR }
+-- Error: feature count mismatch (more features supplied than the model expects).
+SELECT count(predict('model_04509_xgb', x1, x2, y)) FROM training_04509; -- { serverError BAD_ARGUMENTS }
 
 -- ============================================================================
 -- Negative: CREATE MODEL

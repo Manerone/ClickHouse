@@ -74,7 +74,6 @@ void registerTableFunctions()
     registerTableFunctionObjectStorageCluster(factory);
     registerDataLakeTableFunctions(factory);
     registerDataLakeClusterTableFunctions(factory);
-    registerTableFunctionPredict(factory);
 
 #if USE_YTSAURUS
     registerTableFunctionYTsaurus(factory);

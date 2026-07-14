@@ -6,7 +6,6 @@
 
 #include <Common/Exception.h>
 #include <Common/scope_guard_safe.h>
-#include <IO/ReadHelpers.h>
 #include <Core/Block.h>
 #include <Columns/IColumn.h>
 #include <Columns/ColumnsNumber.h>
@@ -18,6 +17,7 @@
 #include <Poco/JSON/Object.h>
 #include <Poco/JSON/Parser.h>
 
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -133,8 +133,8 @@ void XGBoostModel::finalizeTrainingImpl()
     assert(labels.size() == ingested_rows);
     assert(flattened_features.size() == ingested_rows * n_features);
 
-    // Create the DMatrix
-    throwOnError(XGDMatrixCreateFromMat(flattened_features.data(), ingested_rows, n_features, 0, &dmatrix));
+    throwOnError(XGDMatrixCreateFromMat(
+        flattened_features.data(), ingested_rows, n_features, std::numeric_limits<float>::quiet_NaN(), &dmatrix));
 
     // Create the model
     throwOnError(XGBoosterCreate(&dmatrix, 1, &booster));
@@ -199,7 +199,8 @@ ColumnPtr XGBoostModel::predictImpl(const Block & batch, const PredictParameters
         }
     });
 
-    throwOnError(XGDMatrixCreateFromMat(features.data(), rows, n_features, 0, &predict_dmatrix));
+    throwOnError(XGDMatrixCreateFromMat(
+        features.data(), rows, n_features, std::numeric_limits<float>::quiet_NaN(), &predict_dmatrix));
 
     auto result = ColumnFloat64::create();
 

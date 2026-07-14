@@ -23,6 +23,8 @@ public:
     XGBoostModel() = default;
     ~XGBoostModel() override;
 
+    const std::vector<String> & getFeatureNames() const override { return feature_columns; }
+
 protected:
     void setHyperParameters(const HyperParameters & hyper_parameters) override;
 

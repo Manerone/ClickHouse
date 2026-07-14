@@ -4,6 +4,8 @@
 #include <Core/Block_fwd.h>
 #include <Columns/IColumn_fwd.h>
 
+#include <vector>
+
 namespace DB
 {
 
@@ -47,6 +49,11 @@ public:
     /// Predict on a batch of feature rows. Returns a Float64 column of
     /// predictions with one element per row of `batch`.
     ColumnPtr predict(const Block & batch, const PredictParameters & params);
+
+    /// Names of the feature columns, in the order the model was trained on.
+    /// Used by the `predict` function to bind its positional feature arguments
+    /// to the columns each backend expects. Valid only once the model is Trained.
+    virtual const std::vector<String> & getFeatureNames() const = 0;
 
     ModelState state() const { return model_state; }
 
