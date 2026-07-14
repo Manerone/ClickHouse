@@ -25,18 +25,10 @@ namespace ErrorCodes
 ///
 /// Features are passed as individual columns, positionally: argument i (after
 /// the model name) is bound to the model's i-th training feature, so their
-/// order must match the training order. Because the features arrive as separate
-/// columns, they are dropped straight into the prediction Block with no
-/// array (de)interleaving.
+/// order must match the training order
 ///
-/// Feature arguments are numeric; the optional prediction parameters are a JSON
-/// String. That type split makes the trailing `params` unambiguous: it is the
-/// last argument iff that argument is a String.
-///
-/// Top-level Nullable/LowCardinality feature columns are unwrapped by the
-/// default IFunction machinery (see `useDefaultImplementationForNulls` /
-/// `useDefaultImplementationForLowCardinalityColumns`); a NULL feature therefore
-/// yields a NULL prediction for that row.
+/// Feature arguments are numeric; the optional prediction parameter is a JSON
+/// String.
 class FunctionPredict final : public IFunction
 {
 public:
@@ -49,7 +41,7 @@ public:
     bool isVariadic() const override { return true; }
     size_t getNumberOfArguments() const override { return 0; }
 
-    /// A model can be retrained/replaced under the same name, so a call is not pure.
+    /// A model can be retrained/replaced under the same name
     bool isDeterministic() const override { return false; }
     bool isSuitableForShortCircuitArgumentsExecution(const DataTypesWithConstInfo &) const override { return true; }
 

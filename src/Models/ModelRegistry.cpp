@@ -7,8 +7,8 @@ namespace DB
 
 namespace ErrorCodes
 {
-    extern const int MODEL_NOT_FOUND;
-    extern const int MODEL_ALREADY_EXISTS;
+extern const int MODEL_NOT_FOUND;
+extern const int MODEL_ALREADY_EXISTS;
 }
 
 ModelRegistry & ModelRegistry::instance()
@@ -17,37 +17,40 @@ ModelRegistry & ModelRegistry::instance()
     return inst;
 }
 
-void ModelRegistry::registerModel(const String& model_name, ModelPtr model)
+void ModelRegistry::registerModel(const String & model_name, ModelPtr model)
 {
     std::lock_guard lock(mutex);
-    if (models.contains(model_name)) {
+    if (models.contains(model_name))
+    {
         throw Exception(ErrorCodes::MODEL_ALREADY_EXISTS, "Model '{}' was already registered", model_name);
     }
 
     models[model_name] = model;
 }
 
-ModelPtr ModelRegistry::getModel(const std::string & model_name) const
+ModelPtr ModelRegistry::getModel(const String & model_name) const
 {
     std::lock_guard lock(mutex);
     auto it = models.find(model_name);
-    if (it == models.end()) {
+    if (it == models.end())
+    {
         throw Exception(ErrorCodes::MODEL_NOT_FOUND, "No model '{}' exists", model_name);
     }
 
     return it->second;
 }
 
-bool ModelRegistry::hasModel(const String& model_name) const
+void ModelRegistry::unregisterModelIfExists(const String & model_name)
 {
     std::lock_guard lock(mutex);
-    return models.contains(model_name);
+    models.erase(model_name);
 }
 
-void ModelRegistry::unregisterModel(const String& model_name)
+void ModelRegistry::unregisterModel(const String & model_name)
 {
     std::lock_guard lock(mutex);
-    if (!models.contains(model_name)) {
+    if (!models.contains(model_name))
+    {
         throw Exception(ErrorCodes::MODEL_NOT_FOUND, "No model '{}' exists", model_name);
     }
 
