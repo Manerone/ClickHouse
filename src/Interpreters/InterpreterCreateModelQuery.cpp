@@ -1,5 +1,6 @@
 #include <Interpreters/InterpreterCreateModelQuery.h>
 #include <Interpreters/InterpreterFactory.h>
+#include <Models/Model_fwd.h>
 #include <Parsers/ASTCreateModelQuery.h>
 #include <Access/ContextAccess.h>
 #include <Interpreters/Context.h>
@@ -8,6 +9,7 @@
 #include <Parsers/ASTSetQuery.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Interpreters/DatabaseCatalog.h>
+#include <Parsers/IAST_fwd.h>
 #include <Storages/IStorage.h>
 #include <Processors/Executors/PullingPipelineExecutor.h>
 #include <Interpreters/executeQuery.h>
@@ -15,6 +17,7 @@
 
 #include <Models/ModelRegistry.h>
 #include <Models/createModel.h>
+#include <Poco/JSON/Object.h>
 
 namespace DB
 {
@@ -25,6 +28,55 @@ namespace ErrorCodes
     extern const int THERE_IS_NO_COLUMN;
     extern const int UNKNOWN_TABLE;
     extern const int BAD_TYPE_OF_FIELD;
+}
+
+namespace {
+
+// Transforms the options parameter into a valid json
+String serializeOptions(ASTPtr options)
+{
+    if (!options)
+    {
+        return "{}";
+    }
+
+    const auto & set_ast = options->as<const ASTSetQuery &>();
+
+    Poco::JSON::Object json;
+    for (const auto & change : set_ast.changes)
+    {
+        const Field & value = change.value;
+        switch (change.value.getType())
+        {
+            case Field::Types::UInt64: {
+                json.set(change.name, value.safeGet<UInt64>());
+                break;
+            }
+            case Field::Types::Int64: {
+                json.set(change.name, value.safeGet<Int64>());
+                break;
+            }
+            case Field::Types::Float64: {
+                json.set(change.name, value.safeGet<Float64>());
+                break;
+            }
+            case Field::Types::Bool: {
+                json.set(change.name, value.safeGet<bool>());
+                break;
+            }
+            case Field::Types::String: {
+                json.set(change.name, value.safeGet<String>());
+                break;
+            }
+            default: {
+                throw Exception(ErrorCodes::BAD_TYPE_OF_FIELD, "Unsupported value type for model option '{}'", change.name);
+            }
+        }
+    }
+    std::ostringstream oss;
+    json.stringify(oss);
+    return oss.str();
+}
 }
 
 BlockIO InterpreterCreateModelQuery::execute()
@@ -38,7 +90,7 @@ BlockIO InterpreterCreateModelQuery::execute()
 
     const String model_name = create_model_query.model_name->as<ASTIdentifier>()->name();
     const String algorithm = create_model_query.algorithm->as<ASTLiteral>()->value.safeGet<String>();
-    const HyperParameters hyper_parameters = create_model_query.options->as<ASTLiteral>()->value.safeGet<String>();
+    const HyperParameters hyper_parameters = serializeOptions(create_model_query.options);
     const String target_name = create_model_query.target->as<ASTLiteral>()->value.safeGet<String>();
     const String table_name = create_model_query.table_name->as<ASTIdentifier>()->name();
 
