@@ -124,6 +124,10 @@ list (REMOVE_ITEM clickhouse_common_io_sources Common/ExceptionExt.cpp)
 add_headers_and_sources(clickhouse_compression Compression)
 add_library(clickhouse_compression ${clickhouse_compression_headers} ${clickhouse_compression_sources})
 
+if (TARGET ch_contrib::sz3)
+    target_link_libraries (clickhouse_compression PUBLIC ch_contrib::sz3)
+endif()
+
 add_headers_and_sources(dbms Disks/IO)
 add_headers_and_sources(dbms Disks/DiskObjectStorage)
 add_headers_and_sources(dbms Disks/DiskObjectStorage/Replication)
@@ -491,6 +495,10 @@ if (USE_PARQUET)
     add_object_library(clickhouse_processors_formats_impl_parquet Processors/Formats/Impl/Parquet)
 endif()
 
+if (USE_ARROW)
+    add_object_library(clickhouse_processors_formats_impl_arrow_ipc Processors/Formats/Impl/ArrowIPC)
+endif()
+
 if (TARGET ch_contrib::nuraft)
     add_object_library(clickhouse_coordination Coordination)
 endif()
@@ -557,6 +565,10 @@ target_link_libraries(clickhouse_common_io
             pcg_random
             Poco::Foundation
 )
+
+if (TARGET ch_contrib::libdeflate)
+    target_link_libraries(clickhouse_common_io PUBLIC ch_contrib::libdeflate)
+endif()
 
 if (TARGET ch_contrib::libfiu)
     target_link_libraries(clickhouse_common_io PUBLIC ch_contrib::libfiu)
@@ -700,6 +712,11 @@ if (TARGET ch_contrib::parquet)
     target_link_libraries(dbms PRIVATE ch_contrib::parquet)
 endif ()
 
+# Native Arrow IPC reader/writer needs only the FlatBuffers-generated metadata headers, not the Arrow runtime.
+if (TARGET ch_contrib::arrow_ipc_metadata)
+    target_link_libraries(dbms PRIVATE ch_contrib::arrow_ipc_metadata)
+endif ()
+
 if (TARGET ch_contrib::avrocpp)
     target_link_libraries(dbms PRIVATE ch_contrib::avrocpp)
 endif ()
@@ -762,7 +779,7 @@ if (TARGET ch_contrib::brotli)
 endif()
 
 if (TARGET ch_contrib::snappy)
-    target_link_libraries (clickhouse_common_io PUBLIC ch_contrib::snappy)
+    target_link_libraries (clickhouse_common_io PUBLIC ch_contrib::snappy ch_contrib::crc32c)
 endif()
 
 if (TARGET ch_contrib::amqp_cpp)
@@ -827,8 +844,8 @@ if (TARGET ch_contrib::bzip2)
     target_link_libraries (clickhouse_common_io PRIVATE ch_contrib::bzip2)
 endif()
 
-if (TARGET ch_contrib::base64)
-    target_link_libraries (clickhouse_common_io PUBLIC ch_contrib::base64)
+if (TARGET ch_contrib::simdutf)
+    target_link_libraries (clickhouse_common_io PUBLIC ch_contrib::simdutf)
 endif()
 
 if (TARGET ch_contrib::libarchive)
