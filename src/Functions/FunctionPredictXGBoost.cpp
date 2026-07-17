@@ -181,9 +181,17 @@ REGISTER_FUNCTION(PredictXGBoost)
                        "`dictGet(dictionary_name, target, (feature1, feature2, ...))`.",
         .syntax = "predictXGBoost(dictionary_name, feature1[, feature2, ...][, params])",
         .arguments
-        = {{"dictionary_name", "Name of a dictionary with the XGBOOST layout.", {"String"}},
+        = {{"dictionary_name",
+            "Name of a dictionary with the XGBOOST layout. See the "
+            "[XGBOOST dictionary layout](/sql-reference/statements/create/dictionary/layouts/xgboost) for how to create it "
+            "and the training parameters it accepts.",
+            {"String"}},
            {"featureN", "Numeric feature values, positionally in the dictionary's key order.", {"(U)Int*", "Float*"}},
-           {"params", "Optional JSON String of XGBoost prediction parameters.", {"String"}}},
+           {"params",
+            "Optional JSON String of XGBoost prediction parameters. See the "
+            "[prediction parameters](/sql-reference/statements/create/dictionary/layouts/xgboost#prediction-parameters) for "
+            "the accepted keys.",
+            {"String"}}},
         .returned_value = {"The model prediction as Float64, one per row.", {"Float64"}},
         .examples = {{"Predict", "SELECT predictXGBoost('model', 1.0, 2.0);", "7.0"}},
         .introduced_in = {26, 7},
