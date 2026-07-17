@@ -94,18 +94,36 @@ All key and attribute columns must be a native numeric type (integers and floats
 
 ## Layout parameters {#layout-parameters}
 
-Every layout parameter other than `target` is passed straight through to XGBoost as a training hyperparameter and validated when the model trains.
+Only the parameters listed below are accepted; any other name fails the load, so typos are caught when the model trains rather than being silently ignored. `target` and `num_iterations` are handled by ClickHouse (see their descriptions); every other parameter is forwarded to the XGBoost booster unchanged, as a string, and takes XGBoost's own default and value range — see the [XGBoost parameter reference](https://xgboost.readthedocs.io/en/stable/parameter.html).
 
-| Parameter | Description | Example | Default |
-| --- | --- | --- | --- |
-| `target` | Name of the attribute that holds the target. Must name the single attribute. | `'y'` | *Required* |
-| `num_iterations` | Number of boosting rounds. Must be a positive integer. | `100` | `100` |
-| `objective` | XGBoost learning objective. | `'reg:squarederror'` | XGBoost default |
-| `max_depth` | Maximum tree depth. | `6` | XGBoost default |
-| `eta` | Learning rate (also `learning_rate`). | `0.3` | XGBoost default |
-| ... | Any other supported XGBoost training parameter (`subsample`, `lambda`, `tree_method`, `seed`, ...). | | XGBoost default |
+| Parameter | Description |
+| --- | --- |
+| `target` | **Required.** Names the attribute that holds the label. This is a dictionary-structure parameter, not an XGBoost parameter: it must name the single attribute and is never sent to XGBoost. |
+| `num_iterations` | Number of boosting rounds (how many trees to train). A positive integer, used as the training loop count rather than forwarded to the booster. Default `100`. |
+| `booster` | Booster type: `gbtree`, `gblinear`, or `dart`. |
+| `objective` | Learning objective, e.g. `reg:squarederror`, `binary:logistic`, `multi:softmax`. |
+| `eval_metric` | Evaluation metric(s) used during training. |
+| `seed` | Random number seed. |
+| `verbosity` | Logging verbosity: `0` (silent) to `3` (debug). |
+| `nthread` | Number of parallel threads used for training. |
+| `eta` / `learning_rate` | Step-size shrinkage applied after each boosting round (aliases). |
+| `gamma` | Minimum loss reduction required to make a further split on a leaf. |
+| `max_depth` | Maximum depth of a tree. |
+| `min_child_weight` | Minimum sum of instance weight (hessian) needed in a child. |
+| `max_delta_step` | Maximum delta step allowed for each leaf's output. |
+| `subsample` | Fraction of the training rows sampled for each boosting round. |
+| `sampling_method` | Row sampling method: `uniform` or `gradient_based`. |
+| `colsample_bytree` / `colsample_bylevel` / `colsample_bynode` | Fraction of columns (features) sampled per tree / per level / per split. |
+| `lambda` / `reg_lambda` | L2 regularization term on weights (aliases). |
+| `alpha` / `reg_alpha` | L1 regularization term on weights (aliases). |
+| `tree_method` | Tree construction algorithm: `auto`, `exact`, `approx`, or `hist`. |
+| `scale_pos_weight` | Balances positive and negative weights, useful for imbalanced classes. |
+| `grow_policy` | How new nodes are added to the tree: `depthwise` or `lossguide`. |
+| `max_leaves` | Maximum number of leaf nodes (used with `grow_policy` `lossguide`). |
+| `max_bin` | Maximum number of discrete bins used to bucket continuous features (used with `tree_method` `hist`). |
+| `num_parallel_tree` | Number of trees grown per boosting round (a value `> 1` trains a boosted random forest). |
 
-An unknown or unsupported hyperparameter fails the load. You can define the dictionary with `CREATE DICTIONARY` DDL (as in the quickstart above) or in an XML configuration file; see [Dictionary layouts](/sql-reference/statements/create/dictionary/layouts) for where that file goes.
+You can define the dictionary with `CREATE DICTIONARY` DDL (as in the quickstart above) or in an XML configuration file; see [Dictionary layouts](/sql-reference/statements/create/dictionary/layouts) for where that file goes.
 
 <Tabs>
 <TabItem value="ddl" label="DDL" default>
@@ -176,7 +194,19 @@ LIFETIME(3600);
 SELECT predictXGBoost('model', 1.0, 2.0, '{"type": 0, "iteration_end": 0}');
 ```
 
-Supported keys include `type`, `iteration_begin`, `iteration_end`, and `strict_shape`. An unknown key, or a value that is not a JSON object, fails the query.
+These mirror the prediction parameters of XGBoost's `XGBoosterPredictFromDMatrix`. Only the keys below are accepted; any other key, or a value that is not a JSON object, fails the query.
+
+| Parameter | Description | Default |
+| --- | --- | --- |
+| `type` | Prediction type: `0` value, `1` margin, `2` SHAP contributions, `3` approximate contributions, `4` feature interactions, `5` approximate interactions, `6` leaf index. | `0` |
+| `iteration_begin` | First boosting iteration (tree) to include in the prediction. | `0` |
+| `iteration_end` | Last boosting iteration to include; `0` uses all trees. | `0` |
+| `strict_shape` | Apply stricter output-shape rules. | `false` |
+| `ntree_limit` | Deprecated; limits the number of trees used. Prefer `iteration_begin` / `iteration_end`. | — |
+
+:::note
+`predictXGBoost` returns exactly one `Float64` per input row, so only prediction types that produce a single value per row are meaningful. Types that emit several values per row - such as SHAP contributions (`2`, `3`) or feature interactions (`4`, `5`) - are not supported by this function.
+:::
 
 ## Notes {#notes}
 
