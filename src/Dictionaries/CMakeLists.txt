@@ -60,5 +60,11 @@ if (TARGET ch_contrib::vectorscan)
     target_link_libraries(clickhouse_dictionaries PRIVATE ch_contrib::vectorscan)
 endif()
 
+# XGBoostModel.cpp (the XGBOOST dictionary layout backend) is the only translation unit that needs the
+# XGBoost headers and symbols; link them into this library rather than dbms.
+if (TARGET ch_contrib::xgboost)
+    target_link_libraries(clickhouse_dictionaries PRIVATE ch_contrib::xgboost)
+endif()
+
 add_subdirectory(Embedded)
 target_link_libraries(clickhouse_dictionaries PRIVATE ch_contrib::sparsehash)

@@ -1,8 +1,8 @@
+#include <Dictionaries/XGBoostModel.h>
+
 #include <Core/ColumnWithTypeAndName.h>
 #include <DataTypes/IDataType.h>
 #include <IO/ReadHelpers.h>
-#include <Models/Model_fwd.h>
-#include <Models/XGBoostModel.h>
 
 #include <Common/Exception.h>
 #include <Common/scope_guard_safe.h>
@@ -40,17 +40,17 @@ inline void throwOnError(int err){
 }
 }
 
+XGBoostModel::XGBoostModel(const HyperParameters & hyper_parameters)
+    : hps(hyper_parameters)
+{
+}
+
 XGBoostModel::~XGBoostModel()
 {
     if (booster)
         XGBoosterFree(booster);
     if (dmatrix)
         XGDMatrixFree(dmatrix);
-}
-
-void XGBoostModel::setHyperParameters(const HyperParameters & parameters)
-{
-    hps = parameters;
 }
 
 void XGBoostModel::throwIfTypeIsInvalid(const ColumnWithTypeAndName &col){
@@ -62,7 +62,7 @@ void XGBoostModel::throwIfTypeIsInvalid(const ColumnWithTypeAndName &col){
     }
 }
 
-void XGBoostModel::startTrainingImpl(const Block & header, const String & target_column_)
+void XGBoostModel::startTraining(const Block & header, const String & target_column_)
 {
     if (!header.has(target_column_))
         throw Exception(
@@ -86,7 +86,7 @@ void XGBoostModel::startTrainingImpl(const Block & header, const String & target
     n_features = feature_columns.size();
 }
 
-void XGBoostModel::addTrainingDataImpl(const Block & batch)
+void XGBoostModel::addTrainingData(const Block & batch)
 {
     const std::size_t rows = batch.rows();
     if (rows == 0)
@@ -112,7 +112,7 @@ void XGBoostModel::addTrainingDataImpl(const Block & batch)
 
     flattened_features.reserve(ingested_rows + (rows * n_features));
     labels.reserve(ingested_rows + rows);
-    
+
     // Transforms from the Block into a flattened vector, stores the tuples row-wise
     for (std::size_t r = 0; r < rows; ++r)
     {
@@ -124,7 +124,7 @@ void XGBoostModel::addTrainingDataImpl(const Block & batch)
     ingested_rows += rows;
 }
 
-void XGBoostModel::finalizeTrainingImpl()
+void XGBoostModel::finalizeTraining()
 {
     if (ingested_rows == 0)
         throw Exception(ErrorCodes::XGBOOST_ERROR, "No training data was provided");
@@ -164,7 +164,7 @@ void XGBoostModel::finalizeTrainingImpl()
     labels.shrink_to_fit();
 }
 
-ColumnPtr XGBoostModel::predictImpl(const Block & batch, const PredictParameters & params)
+ColumnPtr XGBoostModel::predict(const Block & batch, const PredictParameters & params)
 {
     if(batch.columns() != n_features){
         throw Exception(
