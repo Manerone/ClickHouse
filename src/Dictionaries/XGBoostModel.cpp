@@ -4,11 +4,11 @@
 #include <DataTypes/IDataType.h>
 #include <IO/ReadHelpers.h>
 
+#include <Columns/ColumnsNumber.h>
+#include <Columns/IColumn.h>
+#include <Core/Block.h>
 #include <Common/Exception.h>
 #include <Common/scope_guard_safe.h>
-#include <Core/Block.h>
-#include <Columns/IColumn.h>
-#include <Columns/ColumnsNumber.h>
 
 #include <base/types.h>
 #include <xgboost/c_api.h>
@@ -26,16 +26,18 @@ namespace DB
 
 namespace ErrorCodes
 {
-    extern const int XGBOOST_ERROR;
+extern const int XGBOOST_ERROR;
 }
 
 namespace
 {
 
-inline void throwOnError(int err){
-    if(err != 0){
+inline void throwOnError(int err)
+{
+    if (err != 0)
+    {
         std::string what{XGBGetLastError()};
-        throw Exception(ErrorCodes::XGBOOST_ERROR, "Error: {}", what); \
+        throw Exception(ErrorCodes::XGBOOST_ERROR, "Error: {}", what);
     }
 }
 }
@@ -53,22 +55,24 @@ XGBoostModel::~XGBoostModel()
         XGDMatrixFree(dmatrix);
 }
 
-void XGBoostModel::throwIfTypeIsInvalid(const ColumnWithTypeAndName &col){
+void XGBoostModel::throwIfTypeIsInvalid(const ColumnWithTypeAndName & col)
+{
     auto type = col.type;
     WhichDataType which(type->getTypeId());
-    if(!which.isNativeNumber() || which.isEnum()){
+    if (!which.isNativeNumber() || which.isEnum())
+    {
         throw Exception(
-            ErrorCodes::XGBOOST_ERROR, "XGBoost only accepts numerical types. The column {} has type {}", col.column->getName(), type->getName());
+            ErrorCodes::XGBOOST_ERROR,
+            "XGBoost only accepts numerical types. The column {} has type {}",
+            col.column->getName(),
+            type->getName());
     }
 }
 
 void XGBoostModel::startTraining(const Block & header, const String & target_column_)
 {
     if (!header.has(target_column_))
-        throw Exception(
-            ErrorCodes::XGBOOST_ERROR,
-            "Target column '{}' is not present in the training data",
-            target_column_);
+        throw Exception(ErrorCodes::XGBOOST_ERROR, "Target column '{}' is not present in the training data", target_column_);
 
     target_column = target_column_;
 
@@ -78,10 +82,7 @@ void XGBoostModel::startTraining(const Block & header, const String & target_col
             feature_columns.push_back(column.name);
 
     if (feature_columns.empty())
-        throw Exception(
-            ErrorCodes::XGBOOST_ERROR,
-            "No feature columns for training (target column is '{}')",
-            target_column);
+        throw Exception(ErrorCodes::XGBOOST_ERROR, "No feature columns for training (target column is '{}')", target_column);
 
     n_features = feature_columns.size();
 }
@@ -94,17 +95,18 @@ void XGBoostModel::addTrainingData(const Block & batch)
 
     std::vector<const IColumn *> feature_cols;
     feature_cols.reserve(n_features);
-    for (const auto & name : feature_columns){
-        const auto &col_with_type_and_name = batch.getByName(name);
-        const auto *icol = col_with_type_and_name.column.get();
+    for (const auto & name : feature_columns)
+    {
+        const auto & col_with_type_and_name = batch.getByName(name);
+        const auto * icol = col_with_type_and_name.column.get();
         feature_cols.push_back(icol);
 
         throwIfTypeIsInvalid(col_with_type_and_name);
     }
 
-    const IColumn * label_col {nullptr};
+    const IColumn * label_col{nullptr};
     {
-        const auto &col_with_type_and_name = batch.getByName(target_column);
+        const auto & col_with_type_and_name = batch.getByName(target_column);
         label_col = col_with_type_and_name.column.get();
         throwIfTypeIsInvalid(col_with_type_and_name);
     }
@@ -133,8 +135,8 @@ void XGBoostModel::finalizeTraining()
     assert(labels.size() == ingested_rows);
     assert(flattened_features.size() == ingested_rows * n_features);
 
-    throwOnError(XGDMatrixCreateFromMat(
-        flattened_features.data(), ingested_rows, n_features, std::numeric_limits<float>::quiet_NaN(), &dmatrix));
+    throwOnError(
+        XGDMatrixCreateFromMat(flattened_features.data(), ingested_rows, n_features, std::numeric_limits<float>::quiet_NaN(), &dmatrix));
 
     // Create the model
     throwOnError(XGBoosterCreate(&dmatrix, 1, &booster));
@@ -145,12 +147,14 @@ void XGBoostModel::finalizeTraining()
     // Validate the parameters provided by the user
     const auto params = sanitizeTrainingParams(hps);
 
-    for (const auto & [key, value] : params){
+    for (const auto & [key, value] : params)
+    {
         throwOnError(XGBoosterSetParam(booster, key.c_str(), value.c_str()));
     }
 
     // Train the model
-    for (int i = 0; i < num_iterations; ++i){
+    for (int i = 0; i < num_iterations; ++i)
+    {
         throwOnError(XGBoosterUpdateOneIter(booster, i, dmatrix));
     }
 
@@ -166,10 +170,9 @@ void XGBoostModel::finalizeTraining()
 
 ColumnPtr XGBoostModel::predict(const Block & batch, const PredictParameters & params)
 {
-    if(batch.columns() != n_features){
-        throw Exception(
-            ErrorCodes::XGBOOST_ERROR,
-            "Expected {} features, got {}", n_features, batch.columns());
+    if (batch.columns() != n_features)
+    {
+        throw Exception(ErrorCodes::XGBOOST_ERROR, "Expected {} features, got {}", n_features, batch.columns());
     }
 
     const std::size_t rows = batch.rows();
@@ -191,7 +194,7 @@ ColumnPtr XGBoostModel::predict(const Block & batch, const PredictParameters & p
             features.push_back(static_cast<float>(feature_cols[c]->getFloat64(r)));
     }
 
-    DMatrixHandle predict_dmatrix {nullptr};
+    DMatrixHandle predict_dmatrix{nullptr};
     SCOPE_EXIT({
         if (predict_dmatrix)
         {
@@ -199,8 +202,7 @@ ColumnPtr XGBoostModel::predict(const Block & batch, const PredictParameters & p
         }
     });
 
-    throwOnError(XGDMatrixCreateFromMat(
-        features.data(), rows, n_features, std::numeric_limits<float>::quiet_NaN(), &predict_dmatrix));
+    throwOnError(XGDMatrixCreateFromMat(features.data(), rows, n_features, std::numeric_limits<float>::quiet_NaN(), &predict_dmatrix));
 
     auto result = ColumnFloat64::create();
 
@@ -210,15 +212,13 @@ ColumnPtr XGBoostModel::predict(const Block & batch, const PredictParameters & p
         /* Shape of output prediction */
         bst_ulong const * out_shape{nullptr};
         /* Dimension of output prediction */
-        bst_ulong out_dim {0};
+        bst_ulong out_dim{0};
         /* Pointer to a thread local contiguous array, assigned in prediction function. */
         float const * out_result{nullptr};
 
         String config = sanitizePredictParams(params);
 
-        throwOnError(
-            XGBoosterPredictFromDMatrix(booster, predict_dmatrix, config.c_str(), &out_shape, &out_dim, &out_result)
-        );
+        throwOnError(XGBoosterPredictFromDMatrix(booster, predict_dmatrix, config.c_str(), &out_shape, &out_dim, &out_result));
 
         size_t out_len = 1;
         for (uint64_t i = 0; i < out_dim; ++i)
@@ -281,8 +281,7 @@ std::unordered_map<String, String> XGBoostModel::sanitizeTrainingParams(const Hy
     }
     catch (const Poco::Exception & e)
     {
-        throw Exception(
-            ErrorCodes::XGBOOST_ERROR, "Training parameters are not valid JSON: {}", e.displayText());
+        throw Exception(ErrorCodes::XGBOOST_ERROR, "Training parameters are not valid JSON: {}", e.displayText());
     }
 
     const auto & object = parsed.extract<Poco::JSON::Object::Ptr>();
@@ -292,8 +291,7 @@ std::unordered_map<String, String> XGBoostModel::sanitizeTrainingParams(const Hy
     for (const auto & [key, value] : *object)
     {
         if (!allowed_keys.contains(key))
-            throw Exception(
-                ErrorCodes::XGBOOST_ERROR, "Unknown or forbidden training parameter '{}'", key);
+            throw Exception(ErrorCodes::XGBOOST_ERROR, "Unknown or forbidden training parameter '{}'", key);
         // If we found num_iterations, record this value and do not add it to the final map
         if (key == "num_iterations")
         {
@@ -324,8 +322,7 @@ String XGBoostModel::sanitizePredictParams(const PredictParameters & params)
 
     if (!params.empty())
     {
-        static const std::unordered_set<String> allowed_keys{
-            "type", "iteration_begin", "iteration_end", "strict_shape", "ntree_limit"};
+        static const std::unordered_set<String> allowed_keys{"type", "iteration_begin", "iteration_end", "strict_shape", "ntree_limit"};
 
         Poco::JSON::Parser parser;
         Poco::Dynamic::Var parsed;
@@ -335,8 +332,7 @@ String XGBoostModel::sanitizePredictParams(const PredictParameters & params)
         }
         catch (const Poco::Exception & e)
         {
-            throw Exception(
-                ErrorCodes::XGBOOST_ERROR, "Prediction parameters are not valid JSON: {}", e.displayText());
+            throw Exception(ErrorCodes::XGBOOST_ERROR, "Prediction parameters are not valid JSON: {}", e.displayText());
         }
 
         const auto & object = parsed.extract<Poco::JSON::Object::Ptr>();
@@ -346,8 +342,7 @@ String XGBoostModel::sanitizePredictParams(const PredictParameters & params)
         for (const auto & [key, value] : *object)
         {
             if (!allowed_keys.contains(key))
-                throw Exception(
-                    ErrorCodes::XGBOOST_ERROR, "Unknown or forbidden prediction parameter '{}'", key);
+                throw Exception(ErrorCodes::XGBOOST_ERROR, "Unknown or forbidden prediction parameter '{}'", key);
             config.set(key, value);
         }
     }

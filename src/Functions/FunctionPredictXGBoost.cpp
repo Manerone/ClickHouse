@@ -22,16 +22,16 @@ namespace DB
 
 namespace Setting
 {
-    extern const SettingsBool allow_experimental_xgboost;
+extern const SettingsBool allow_experimental_xgboost;
 }
 
 namespace ErrorCodes
 {
-    extern const int ILLEGAL_TYPE_OF_ARGUMENT;
-    extern const int ILLEGAL_COLUMN;
-    extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
-    extern const int BAD_ARGUMENTS;
-    extern const int SUPPORT_IS_DISABLED;
+extern const int ILLEGAL_TYPE_OF_ARGUMENT;
+extern const int ILLEGAL_COLUMN;
+extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
+extern const int BAD_ARGUMENTS;
+extern const int SUPPORT_IS_DISABLED;
 }
 
 namespace
@@ -50,12 +50,17 @@ class FunctionPredictXGBoost final : public IFunction
 public:
     static constexpr auto name = "predictXGBoost";
 
-    explicit FunctionPredictXGBoost(ContextPtr context_) : context(std::move(context_)) {}
+    explicit FunctionPredictXGBoost(ContextPtr context_)
+        : context(std::move(context_))
+    {
+    }
     static FunctionPtr create(ContextPtr context_)
     {
         if (!context_->getSettingsRef()[Setting::allow_experimental_xgboost])
-            throw Exception(ErrorCodes::SUPPORT_IS_DISABLED,
-                "Function '{}' is experimental. Set `allow_experimental_xgboost` setting to enable it", name);
+            throw Exception(
+                ErrorCodes::SUPPORT_IS_DISABLED,
+                "Function '{}' is experimental. Set `allow_experimental_xgboost` setting to enable it",
+                name);
 
         return std::make_shared<FunctionPredictXGBoost>(context_);
     }
@@ -73,24 +78,30 @@ public:
     DataTypePtr getReturnTypeImpl(const ColumnsWithTypeAndName & arguments) const override
     {
         if (arguments.size() < 2)
-            throw Exception(ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH,
-                "Function '{}' expects 'dictionary_name, feature1[, feature2, ...][, params]'", getName());
+            throw Exception(
+                ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH,
+                "Function '{}' expects 'dictionary_name, feature1[, feature2, ...][, params]'",
+                getName());
 
         if (!isString(arguments[0].type))
-            throw Exception(ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
-                "First argument of function '{}' (dictionary name) must be a constant String", getName());
+            throw Exception(
+                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
+                "First argument of function '{}' (dictionary name) must be a constant String",
+                getName());
 
         const size_t feature_end = featureEnd(arguments);
 
         if (feature_end < 2)
-            throw Exception(ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH,
-                "Function '{}' expects at least one feature argument", getName());
+            throw Exception(ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH, "Function '{}' expects at least one feature argument", getName());
 
         for (size_t i = 1; i < feature_end; ++i)
             if (!isNumber(arguments[i].type))
-                throw Exception(ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
+                throw Exception(
+                    ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
                     "Feature argument {} of function '{}' must be numeric, got {}",
-                    i, getName(), arguments[i].type->getName());
+                    i,
+                    getName(),
+                    arguments[i].type->getName());
 
         /// Fail at analysis time if the named dictionary is missing or does not have the XGBOOST layout.
         validateDictionaryIsXGBoost(arguments);
@@ -106,7 +117,8 @@ public:
 
         if (!access_checked.load(std::memory_order_relaxed))
         {
-            context->checkAccess(AccessType::dictGet, dictionary->getDatabaseOrNoDatabaseTag(), dictionary->getDictionaryID().getTableName());
+            context->checkAccess(
+                AccessType::dictGet, dictionary->getDatabaseOrNoDatabaseTag(), dictionary->getDictionaryID().getTableName());
             access_checked.store(true, std::memory_order_relaxed);
         }
 
@@ -124,9 +136,13 @@ public:
         const size_t num_feature_args = feature_end - 1;
 
         if (num_feature_args != n_features)
-            throw Exception(ErrorCodes::BAD_ARGUMENTS,
+            throw Exception(
+                ErrorCodes::BAD_ARGUMENTS,
                 "Function '{}': dictionary '{}' expects {} features but {} were supplied",
-                getName(), dictionary_name, n_features, num_feature_args);
+                getName(),
+                dictionary_name,
+                n_features,
+                num_feature_args);
 
         Block block;
         for (size_t c = 0; c < n_features; ++c)
@@ -162,23 +178,24 @@ private:
     {
         const auto * name_col = checkAndGetColumnConst<ColumnString>(arguments[0].column.get());
         if (!name_col)
-            throw Exception(ErrorCodes::ILLEGAL_COLUMN,
-                "Argument 'dictionary name' of function '{}' must be a constant String", getName());
+            throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Argument 'dictionary name' of function '{}' must be a constant String", getName());
 
         const String dictionary_name = name_col->getValue<String>();
         const auto layout_type = context->getExternalDictionariesLoader().getDictionaryLayoutType(dictionary_name, context);
         if (layout_type != "xgboost")
-            throw Exception(ErrorCodes::BAD_ARGUMENTS,
+            throw Exception(
+                ErrorCodes::BAD_ARGUMENTS,
                 "Dictionary '{}' has layout '{}', but function {} requires a dictionary with the XGBOOST layout",
-                dictionary_name, layout_type, getName());
+                dictionary_name,
+                layout_type,
+                getName());
     }
 
     String getConstString(const ColumnWithTypeAndName & arg, const char * what) const
     {
         const auto * col = checkAndGetColumnConst<ColumnString>(arg.column.get());
         if (!col)
-            throw Exception(ErrorCodes::ILLEGAL_COLUMN,
-                "Argument '{}' of function '{}' must be a constant String", what, getName());
+            throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Argument '{}' of function '{}' must be a constant String", what, getName());
         return col->getValue<String>();
     }
 };

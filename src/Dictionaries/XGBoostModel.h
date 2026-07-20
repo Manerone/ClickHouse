@@ -1,7 +1,7 @@
 #pragma once
 
-#include <Core/Block_fwd.h>
 #include <Columns/IColumn_fwd.h>
+#include <Core/Block_fwd.h>
 #include <base/types.h>
 
 #include <mutex>
@@ -58,11 +58,11 @@ private:
 
     /// XGBoost C-API handles. `BoosterHandle` and `DMatrixHandle` are `void *`, kept opaque here so this
     /// header stays free of the XGBoost headers (only XGBoostModel.cpp needs them).
-    void * booster {nullptr};
-    void * dmatrix {nullptr};
+    void * booster{nullptr};
+    void * dmatrix{nullptr};
 
     HyperParameters hps;
-    int num_iterations {100};
+    int num_iterations{100};
 
     /// Target column.
     String target_column;

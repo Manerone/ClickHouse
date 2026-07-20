@@ -1,13 +1,13 @@
 #include <Dictionaries/XGBoostDictionary.h>
 
-#include <Core/Block.h>
 #include <Columns/ColumnsNumber.h>
+#include <Core/Block.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <DataTypes/IDataType.h>
 #include <Dictionaries/DictionaryFactory.h>
 #include <Dictionaries/DictionaryPipelineExecutor.h>
-#include <Interpreters/castColumn.h>
 #include <Dictionaries/XGBoostModel.h>
+#include <Interpreters/castColumn.h>
 #include <QueryPipeline/BlockIO.h>
 #include <QueryPipeline/Pipe.h>
 #include <Common/logger_useful.h>
@@ -147,8 +147,7 @@ ColumnUInt8::Ptr XGBoostDictionary::hasKeys(const Columns & key_columns, const D
 
 Pipe XGBoostDictionary::read(const Names &, size_t, size_t) const
 {
-    throw Exception(
-        ErrorCodes::UNSUPPORTED_METHOD, "An XGBoost dictionary trains a model and cannot be read back as a table of rows");
+    throw Exception(ErrorCodes::UNSUPPORTED_METHOD, "An XGBoost dictionary trains a model and cannot be read back as a table of rows");
 }
 
 
@@ -166,8 +165,7 @@ void registerDictionaryXGBoost(DictionaryFactory & factory)
         /// The structure must be a complex key of one or more numeric feature columns, followed by exactly one
         /// numeric attribute: the training target.
         if (!dict_struct.key || dict_struct.key->empty())
-            throw Exception(
-                ErrorCodes::BAD_ARGUMENTS, "XGBoost dictionary must have at least one key column (the numeric features)");
+            throw Exception(ErrorCodes::BAD_ARGUMENTS, "XGBoost dictionary must have at least one key column (the numeric features)");
 
         auto validate_numeric = [](const std::string & role, const DictionaryAttribute & attribute)
         {

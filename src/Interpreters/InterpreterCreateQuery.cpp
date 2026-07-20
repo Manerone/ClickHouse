@@ -1658,7 +1658,8 @@ BlockIO InterpreterCreateQuery::createTable(ASTCreateQuery & create)
     if (create.is_dictionary && !create.attach && create.dictionary && create.dictionary->layout
         && Poco::toLower(create.dictionary->layout->layout_type) == "xgboost"
         && !getContext()->getSettingsRef()[Setting::allow_experimental_xgboost])
-        throw Exception(ErrorCodes::SUPPORT_IS_DISABLED,
+        throw Exception(
+            ErrorCodes::SUPPORT_IS_DISABLED,
             "The XGBOOST dictionary layout is experimental. Set `allow_experimental_xgboost` setting to enable it");
 
     String current_database = getContext()->getCurrentDatabase();
