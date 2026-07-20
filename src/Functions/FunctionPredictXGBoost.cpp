@@ -5,6 +5,7 @@
 #include <Columns/ColumnString.h>
 #include <Columns/ColumnsNumber.h>
 #include <Core/Block.h>
+#include <Core/Settings.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <DataTypes/IDataType.h>
 #include <Dictionaries/XGBoostDictionary.h>
@@ -19,12 +20,18 @@
 namespace DB
 {
 
+namespace Setting
+{
+    extern const SettingsBool allow_experimental_xgboost;
+}
+
 namespace ErrorCodes
 {
     extern const int ILLEGAL_TYPE_OF_ARGUMENT;
     extern const int ILLEGAL_COLUMN;
     extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
     extern const int BAD_ARGUMENTS;
+    extern const int SUPPORT_IS_DISABLED;
 }
 
 namespace
@@ -44,7 +51,14 @@ public:
     static constexpr auto name = "predictXGBoost";
 
     explicit FunctionPredictXGBoost(ContextPtr context_) : context(std::move(context_)) {}
-    static FunctionPtr create(ContextPtr context_) { return std::make_shared<FunctionPredictXGBoost>(context_); }
+    static FunctionPtr create(ContextPtr context_)
+    {
+        if (!context_->getSettingsRef()[Setting::allow_experimental_xgboost])
+            throw Exception(ErrorCodes::SUPPORT_IS_DISABLED,
+                "Function '{}' is experimental. Set `allow_experimental_xgboost` setting to enable it", name);
+
+        return std::make_shared<FunctionPredictXGBoost>(context_);
+    }
 
     String getName() const override { return name; }
 

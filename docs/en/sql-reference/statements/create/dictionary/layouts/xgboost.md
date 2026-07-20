@@ -14,6 +14,14 @@ The `xgboost` (`XGBOOST`) dictionary trains an [XGBoost](https://xgboost.readthe
 
 It is suited to tabular regression and classification where the features are numeric — for example forecasting a value from several measurements, or scoring rows against a learned target.
 
+:::note
+The XGBoost integration is experimental. Enable it with the `allow_experimental_xgboost` setting before creating an `XGBOOST` dictionary or calling `predictXGBoost`:
+
+```sql
+SET allow_experimental_xgboost = 1;
+```
+:::
+
 You query the dictionary in one of two ways:
 
 - [`predictXGBoost`](/sql-reference/functions/machine-learning-functions#predictxgboost) takes the features as individual arguments and returns the prediction.
