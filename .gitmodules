@@ -360,9 +360,6 @@
 [submodule "contrib/xgboost"]
 	path = contrib/xgboost
 	url = https://github.com/dmlc/xgboost.git
-[submodule "contrib/libpng"]
-	path = contrib/libpng
-	url = https://github.com/pnggroup/libpng.git
 [submodule "contrib/chdig"]
 	path = contrib/chdig
 	url = https://github.com/azat/chdig.git
@@ -417,3 +414,6 @@
 [submodule "contrib/mapbox-geometry"]
 	path = contrib/mapbox-geometry
 	url = https://github.com/ClickHouse/geometry.hpp
+[submodule "contrib/zxc"]
+	path = contrib/zxc
+	url = https://github.com/ClickHouse/zxc
