@@ -193,15 +193,10 @@ void registerDictionaryXGBoost(DictionaryFactory & factory)
 
         const String layout_prefix = config_prefix + ".layout.xgboost";
 
-        /// `target` is required and must name the single attribute. Every other layout parameter is an XGBoost
+        /// The target is always the single attribute (the only column not part of the feature key), so it is
+        /// inferred from the structure and is not a layout parameter. Every layout parameter is an XGBoost
         /// hyperparameter; the hyperparameters are collected into a JSON object and validated against the
         /// backend's allowlist when the model trains (see XGBoostModel).
-        if (!config.has(layout_prefix + ".target"))
-            throw Exception(
-                ErrorCodes::BAD_ARGUMENTS,
-                "XGBoost dictionary layout requires a 'target' parameter naming the target attribute, e.g. target '{}'",
-                target_attribute.name);
-
         Poco::Util::AbstractConfiguration::Keys layout_keys;
         config.keys(layout_prefix, layout_keys);
 
@@ -209,16 +204,6 @@ void registerDictionaryXGBoost(DictionaryFactory & factory)
         for (const auto & key : layout_keys)
         {
             const String value = config.getString(layout_prefix + "." + key);
-            if (key == "target")
-            {
-                if (value != target_attribute.name)
-                    throw Exception(
-                        ErrorCodes::BAD_ARGUMENTS,
-                        "XGBoost dictionary: 'target' names '{}', but the only attribute is '{}'",
-                        value,
-                        target_attribute.name);
-                continue;
-            }
             hyper_json.set(key, value);
         }
 
@@ -247,7 +232,7 @@ void registerDictionaryXGBoost(DictionaryFactory & factory)
             .description = "A computational dictionary that trains an immutable XGBoost model at load time from a source table of "
                            "`(features..., target)` rows, then predicts the target for a feature vector through `dictGet` or the "
                            "`predictXGBoost` function. The feature columns are the key and the single attribute is the target.",
-            .syntax = "LAYOUT(XGBOOST(target 'name' [objective '...'] [num_iterations N] [max_depth N] [eta 0.3] [...]))",
+            .syntax = "LAYOUT(XGBOOST([objective '...'] [num_iterations N] [max_depth N] [eta 0.3] [...]))",
             .introduced_in = {26, 7}});
 }
 

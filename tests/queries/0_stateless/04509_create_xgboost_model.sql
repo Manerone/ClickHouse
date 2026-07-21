@@ -10,10 +10,6 @@ SET allow_experimental_xgboost = 1;
 -- that happen when the function executes. Every query below therefore consumes the predicted value
 -- (sum(isFinite(...)), a scalar SELECT, or an equality) so the prediction actually runs.
 
--- ============================================================================
--- Setup
--- ============================================================================
-
 DROP DICTIONARY IF EXISTS model_04509_xgb;
 DROP DICTIONARY IF EXISTS model_04509_bad;
 DROP DICTIONARY IF EXISTS model_04509_not_xgb;
@@ -41,8 +37,6 @@ SELECT
     2 * x1 + 3 * x2 AS y
 FROM numbers(100);
 
-SELECT count() FROM training_04509;
-
 -- Feature-only table for inference: exactly the feature columns, no target.
 CREATE TABLE inference_04509
 (
@@ -55,15 +49,13 @@ ORDER BY tuple();
 INSERT INTO inference_04509 (x1, x2)
 SELECT number AS x1, number * 2 AS x2 FROM numbers(10);
 
--- ============================================================================
--- Positive: an XGBOOST dictionary with explicit hyperparameters
--- ============================================================================
+SELECT 'Positive: an XGBOOST dictionary with explicit hyperparameters';
 
 -- The feature columns are the key and the single attribute is the target.
 CREATE DICTIONARY model_04509_xgb (x1 Float64, x2 Float64, y Float64)
 PRIMARY KEY (x1, x2)
 SOURCE(CLICKHOUSE(TABLE 'training_04509'))
-LAYOUT(XGBOOST(target 'y' max_depth 4 eta 0.3 objective 'reg:squarederror' num_iterations 10))
+LAYOUT(XGBOOST(max_depth 4 eta 0.3 objective 'reg:squarederror' num_iterations 10))
 LIFETIME(0);
 
 -- `predictXGBoost` is a row-wise function returning one Float64 per input row. Exact XGBoost outputs
@@ -76,30 +68,24 @@ SELECT any(toTypeName(predictXGBoost('model_04509_xgb', x1, x2))) FROM inference
 SELECT sum(isFinite(dictGet('model_04509_xgb', 'y', (x1, x2)))) FROM inference_04509;
 SELECT sum(predictXGBoost('model_04509_xgb', x1, x2) = dictGet('model_04509_xgb', 'y', (x1, x2))) FROM inference_04509;
 
--- ============================================================================
--- Positive: default hyperparameters (empty layout apart from the required target)
--- ============================================================================
+SELECT 'Positive: default hyperparameters (empty layout)';
 
 DROP DICTIONARY model_04509_xgb;
 CREATE DICTIONARY model_04509_xgb (x1 Float64, x2 Float64, y Float64)
 PRIMARY KEY (x1, x2)
 SOURCE(CLICKHOUSE(TABLE 'training_04509'))
-LAYOUT(XGBOOST(target 'y'))
+LAYOUT(XGBOOST())
 LIFETIME(0);
 
 SELECT sum(isFinite(predictXGBoost('model_04509_xgb', x1, x2))) FROM inference_04509;
 
--- ============================================================================
--- Positive: predict with prediction parameters
--- ============================================================================
+SELECT 'Positive: predict with prediction parameters';
 
 -- An explicit (valid) prediction-parameters JSON as the trailing argument.
 SELECT sum(isFinite(predictXGBoost('model_04509_xgb', x1, x2, '{"iteration_begin": 0, "iteration_end": 0}'))) FROM inference_04509;
 SELECT sum(isFinite(predictXGBoost('model_04509_xgb', x1, x2, '{"type": 0}'))) FROM inference_04509;
 
--- ============================================================================
--- Negative: prediction parameters
--- ============================================================================
+SELECT 'Negative: prediction parameters';
 
 -- Error: unknown/forbidden prediction parameter.
 SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, '{"not_a_predict_param": 1}'); -- { serverError XGBOOST_ERROR }
@@ -110,9 +96,7 @@ SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, 'not a json'); -- { serverErr
 -- Error: prediction parameters are valid JSON but not a JSON object.
 SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, '123'); -- { serverError XGBOOST_ERROR }
 
--- ============================================================================
--- Negative: predictXGBoost arguments
--- ============================================================================
+SELECT 'Negative: predictXGBoost arguments';
 
 -- Error: a feature argument is not numeric.
 SELECT predictXGBoost('model_04509_xgb', 'x', 2.0); -- { serverError ILLEGAL_TYPE_OF_ARGUMENT }
@@ -123,9 +107,7 @@ SELECT predictXGBoost('model_04509_missing', 1.0, 2.0); -- { serverError BAD_ARG
 -- Error: feature count mismatch (more features supplied than the model expects).
 SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, 3.0); -- { serverError BAD_ARGUMENTS }
 
--- ============================================================================
--- Negative: predictXGBoost against a non-XGBoost dictionary
--- ============================================================================
+SELECT 'Negative: predictXGBoost against a non-XGBoost dictionary';
 
 CREATE TABLE not_xgb_04509_src (id UInt64, val Float64) ENGINE = Memory;
 INSERT INTO not_xgb_04509_src VALUES (1, 42);
@@ -142,41 +124,38 @@ SELECT predictXGBoost('model_04509_not_xgb', 1.0); -- { serverError BAD_ARGUMENT
 DROP DICTIONARY model_04509_not_xgb;
 DROP TABLE not_xgb_04509_src;
 
--- ============================================================================
--- Negative: bad hyperparameters (rejected when the model trains, at first use)
--- ============================================================================
+SELECT 'Negative: bad hyperparameters (rejected when the model trains, at first use)';
 
 -- Error: unknown/forbidden training parameter.
 CREATE DICTIONARY model_04509_bad (x1 Float64, x2 Float64, y Float64)
 PRIMARY KEY (x1, x2) SOURCE(CLICKHOUSE(TABLE 'training_04509'))
-LAYOUT(XGBOOST(target 'y' not_a_training_param 1)) LIFETIME(0);
+LAYOUT(XGBOOST(not_a_training_param 1)) LIFETIME(0);
 SELECT predictXGBoost('model_04509_bad', 1.0, 2.0); -- { serverError XGBOOST_ERROR }
 DROP DICTIONARY model_04509_bad;
 
 -- Error: num_iterations must be a positive integer.
 CREATE DICTIONARY model_04509_bad (x1 Float64, x2 Float64, y Float64)
 PRIMARY KEY (x1, x2) SOURCE(CLICKHOUSE(TABLE 'training_04509'))
-LAYOUT(XGBOOST(target 'y' num_iterations 0)) LIFETIME(0);
+LAYOUT(XGBOOST(num_iterations 0)) LIFETIME(0);
 SELECT predictXGBoost('model_04509_bad', 1.0, 2.0); -- { serverError XGBOOST_ERROR }
 DROP DICTIONARY model_04509_bad;
 
--- Error: 'target' is required.
-CREATE DICTIONARY model_04509_bad (x1 Float64, x2 Float64, y Float64)
+-- Positive: the target is always inferred as the single non-key attribute; no 'target' parameter.
+CREATE DICTIONARY model_04509_infer (x1 Float64, x2 Float64, y Float64)
 PRIMARY KEY (x1, x2) SOURCE(CLICKHOUSE(TABLE 'training_04509'))
 LAYOUT(XGBOOST()) LIFETIME(0);
-SELECT predictXGBoost('model_04509_bad', 1.0, 2.0); -- { serverError BAD_ARGUMENTS }
-DROP DICTIONARY model_04509_bad;
+SELECT sum(isFinite(predictXGBoost('model_04509_infer', x1, x2))) FROM inference_04509;
+DROP DICTIONARY model_04509_infer;
 
--- Error: 'target' names a column that is not the single attribute.
+-- Error: 'target' is not a valid parameter. The target is inferred, so a 'target' key is forwarded to
+-- XGBoost as an unknown hyperparameter and rejected when the model trains.
 CREATE DICTIONARY model_04509_bad (x1 Float64, x2 Float64, y Float64)
 PRIMARY KEY (x1, x2) SOURCE(CLICKHOUSE(TABLE 'training_04509'))
-LAYOUT(XGBOOST(target 'x1')) LIFETIME(0);
-SELECT predictXGBoost('model_04509_bad', 1.0, 2.0); -- { serverError BAD_ARGUMENTS }
+LAYOUT(XGBOOST(target 'y')) LIFETIME(0);
+SELECT predictXGBoost('model_04509_bad', 1.0, 2.0); -- { serverError XGBOOST_ERROR }
 DROP DICTIONARY model_04509_bad;
 
--- ============================================================================
--- Negative: non-numeric structure (rejected at first use)
--- ============================================================================
+SELECT 'Negative: non-numeric structure (rejected at first use)';
 
 CREATE TABLE training_04509_non_numeric
 (
@@ -191,15 +170,13 @@ INSERT INTO training_04509_non_numeric VALUES ('a0', 'b0', 'c0'), ('a1', 'b1', '
 
 CREATE DICTIONARY model_04509_bad (x1 String, x2 String, y String DEFAULT '')
 PRIMARY KEY (x1, x2) SOURCE(CLICKHOUSE(TABLE 'training_04509_non_numeric'))
-LAYOUT(XGBOOST(target 'y')) LIFETIME(0);
+LAYOUT(XGBOOST()) LIFETIME(0);
 -- Numeric literal features so the function's own argument-type check passes; the dictionary load then
 -- rejects the String key/attribute structure with BAD_ARGUMENTS.
 SELECT predictXGBoost('model_04509_bad', 1.0, 2.0); -- { serverError BAD_ARGUMENTS }
 DROP DICTIONARY model_04509_bad;
 
--- ============================================================================
--- Train on demand with SYSTEM RELOAD DICTIONARY
--- ============================================================================
+SELECT 'Train on demand with SYSTEM RELOAD DICTIONARY';
 
 -- By default the model is trained lazily, on first use. SYSTEM RELOAD DICTIONARY trains it synchronously
 -- on demand instead: after the reload the dictionary is LOADED before any predictXGBoost / dictGet uses
@@ -209,7 +186,7 @@ DROP DICTIONARY model_04509_bad;
 CREATE DICTIONARY model_04509_eager (x1 Float64, x2 Float64, y Float64)
 PRIMARY KEY (x1, x2)
 SOURCE(CLICKHOUSE(TABLE 'training_04509'))
-LAYOUT(XGBOOST(target 'y' objective 'reg:squarederror' num_iterations 10))
+LAYOUT(XGBOOST(objective 'reg:squarederror' num_iterations 10))
 LIFETIME(0);
 
 -- Trained by the reload: the dictionary is LOADED before any predictXGBoost / dictGet uses it.
@@ -224,20 +201,17 @@ DROP DICTIONARY model_04509_eager;
 -- Error: num_iterations must be a positive integer.
 CREATE DICTIONARY model_04509_eager (x1 Float64, x2 Float64, y Float64)
 PRIMARY KEY (x1, x2) SOURCE(CLICKHOUSE(TABLE 'training_04509'))
-LAYOUT(XGBOOST(target 'y' num_iterations 0)) LIFETIME(0);
+LAYOUT(XGBOOST(num_iterations 0)) LIFETIME(0);
 SYSTEM RELOAD DICTIONARY model_04509_eager; -- { serverError XGBOOST_ERROR }
 DROP DICTIONARY model_04509_eager;
 
--- Error: 'target' is required.
+-- Positive: the eager reload trains successfully
 CREATE DICTIONARY model_04509_eager (x1 Float64, x2 Float64, y Float64)
 PRIMARY KEY (x1, x2) SOURCE(CLICKHOUSE(TABLE 'training_04509'))
 LAYOUT(XGBOOST()) LIFETIME(0);
-SYSTEM RELOAD DICTIONARY model_04509_eager; -- { serverError BAD_ARGUMENTS }
+SYSTEM RELOAD DICTIONARY model_04509_eager;
+SELECT status FROM system.dictionaries WHERE database = currentDatabase() AND name = 'model_04509_eager';
 DROP DICTIONARY model_04509_eager;
-
--- ============================================================================
--- Cleanup
--- ============================================================================
 
 DROP DICTIONARY model_04509_xgb;
 DROP TABLE training_04509_non_numeric;

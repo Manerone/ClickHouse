@@ -50,7 +50,6 @@ CREATE DICTIONARY model (x1 Float64, x2 Float64, y Float64)
 PRIMARY KEY (x1, x2)
 SOURCE(CLICKHOUSE(TABLE 'training_data'))
 LAYOUT(XGBOOST(
-    target 'y'
     objective 'reg:squarederror'
     num_iterations 100
     max_depth 6
@@ -58,7 +57,7 @@ LAYOUT(XGBOOST(
 LIFETIME(0);
 ```
 
-`PRIMARY KEY (x1, x2)` makes `x1` and `x2` the features — but for an `XGBOOST` dictionary this "key" is the feature vector you pass in to predict, not a stored value you look up (see [Dictionary structure](#dictionary-structure)). The `LAYOUT` configures the model: `target 'y'` names the target attribute the model learns, and everything else is an XGBoost hyperparameter (see [Layout parameters](#layout-parameters)).
+`PRIMARY KEY (x1, x2)` makes `x1` and `x2` the features — but for an `XGBOOST` dictionary this "key" is the feature vector you pass in to predict, not a stored value you look up (see [Dictionary structure](#dictionary-structure)). The target the model learns is `y`, inferred as the single column that is not part of the key; the parameters in `LAYOUT` are XGBoost hyperparameters (see [Layout parameters](#layout-parameters)).
 
 **4. Predict** — `predictXGBoost` takes the features positionally and returns the prediction:
 
@@ -98,17 +97,16 @@ SYSTEM RELOAD DICTIONARY model;
 An `XGBOOST` dictionary has a fixed shape:
 
 - The `PRIMARY KEY` is one or more numeric columns — the features. At query time this "key" is the feature vector you pass in to predict, not a stored lookup key. The feature order is the key-column declaration order, and `predictXGBoost` binds its positional arguments to that order.
-- Alongside them, declare **exactly one numeric attribute**: the target the model learns. The `target` layout parameter names it, so which column is the target is stated explicitly even though it is the only attribute.
+- Alongside them, declare **exactly one numeric attribute**: the target the model learns. It is always inferred as the single column that is not part of the feature key — there is no parameter to name it, and it is an error to declare more than one attribute.
 
 All key and attribute columns must be a native numeric type (integers and floats); a non-numeric column is rejected when the dictionary loads, not when you create it.
 
 ## Layout parameters {#layout-parameters}
 
-Only the parameters listed below are accepted; any other name fails the load, so typos are caught when the model trains rather than being silently ignored. `target` and `num_iterations` are handled by ClickHouse (see their descriptions); every other parameter is forwarded to the XGBoost booster unchanged, as a string, and takes XGBoost's own default and value range — see the [XGBoost parameter reference](https://xgboost.readthedocs.io/en/stable/parameter.html).
+Only the parameters listed below are accepted; any other name fails the load, so typos are caught when the model trains rather than being silently ignored. `num_iterations` is handled by ClickHouse (see its description); every other parameter is forwarded to the XGBoost booster unchanged, as a string, and takes XGBoost's own default and value range — see the [XGBoost parameter reference](https://xgboost.readthedocs.io/en/stable/parameter.html).
 
 | Parameter | Description |
 | --- | --- |
-| `target` | **Required.** Names the attribute that holds the label. This is a dictionary-structure parameter, not an XGBoost parameter: it must name the single attribute and is never sent to XGBoost. |
 | `num_iterations` | Number of boosting rounds (how many trees to train). A positive integer, used as the training loop count rather than forwarded to the booster. Default `100`. |
 | `booster` | Booster type: `gbtree`, `gblinear`, or `dart`. |
 | `objective` | Learning objective, e.g. `reg:squarederror`, `binary:logistic`, `multi:softmax`. |
@@ -140,7 +138,6 @@ CREATE DICTIONARY model (x1 Float64, x2 Float64, y Float64)
 PRIMARY KEY (x1, x2)
 SOURCE(CLICKHOUSE(TABLE 'training_data'))
 LAYOUT(XGBOOST(
-    target 'y'
     objective 'reg:squarederror'
     num_iterations 100
     max_depth 6
