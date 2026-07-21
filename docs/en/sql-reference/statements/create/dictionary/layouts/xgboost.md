@@ -21,8 +21,8 @@ SET allow_experimental_xgboost = 1;
 
 You query the dictionary in one of two ways:
 
-- [`predictXGBoost`](/sql-reference/functions/machine-learning-functions#predictxgboost) takes the features as individual arguments and returns the prediction.
-- A plain [`dictGet`](/sql-reference/functions/ext-dict-functions#dictget) for the target attribute predicts too, taking the feature vector as the key (see [Notes](#notes)).
+- [`predictXGBoost`](/sql-reference/functions/machine-learning-functions#predictxgboost) takes the features as individual arguments and returns the prediction, accepts additional [prediction parameters] (#prediction-parameters).
+- A plain [`dictGet`](/sql-reference/functions/ext-dict-functions#dictget) for the target attribute predicts too, taking the feature vector as the key (see [Notes](#notes)). This method doesn't accept additional prediction parameters, if those are necessary please use `predictXGBoost`.
 
 ## Quickstart {#quickstart}
 
