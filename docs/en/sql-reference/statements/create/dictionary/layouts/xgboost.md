@@ -7,9 +7,6 @@ description: 'Configure XGBOOST dictionaries to train a gradient-boosted model a
 doc_type: 'reference'
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 The `xgboost` (`XGBOOST`) dictionary trains an [XGBoost](https://xgboost.readthedocs.io/) gradient-boosted model once, at load time, from a source table of training rows, then predicts a numeric target for any feature vector you pass in. The feature columns are the dictionary key and the single attribute is the target the model learns.
 
 It is suited to tabular regression and classification where the features are numeric — for example forecasting a value from several measurements, or scoring rows against a learned target.
@@ -52,7 +49,12 @@ FROM numbers(100);
 CREATE DICTIONARY model (x1 Float64, x2 Float64, y Float64)
 PRIMARY KEY (x1, x2)
 SOURCE(CLICKHOUSE(TABLE 'training_data'))
-LAYOUT(XGBOOST(target 'y' objective 'reg:squarederror' num_iterations 100 max_depth 6))
+LAYOUT(XGBOOST(
+    target 'y'
+    objective 'reg:squarederror'
+    num_iterations 100
+    max_depth 6
+))
 LIFETIME(0);
 ```
 
@@ -131,10 +133,7 @@ Only the parameters listed below are accepted; any other name fails the load, so
 | `max_bin` | Maximum number of discrete bins used to bucket continuous features (used with `tree_method` `hist`). |
 | `num_parallel_tree` | Number of trees grown per boosting round (a value `> 1` trains a boosted random forest). |
 
-You can define the dictionary with `CREATE DICTIONARY` DDL (as in the quickstart above) or in an XML configuration file; see [Dictionary layouts](/sql-reference/statements/create/dictionary/layouts) for where that file goes.
-
-<Tabs>
-<TabItem value="ddl" label="DDL" default>
+You can define the dictionary with `CREATE DICTIONARY` DDL (as in the quickstart above).
 
 ```sql
 CREATE DICTIONARY model (x1 Float64, x2 Float64, y Float64)
@@ -149,50 +148,6 @@ LAYOUT(XGBOOST(
 ))
 LIFETIME(3600);
 ```
-
-</TabItem>
-<TabItem value="xml" label="Configuration file">
-
-```xml
-<dictionary>
-    <name>model</name>
-    <structure>
-        <key>
-            <attribute>
-                <name>x1</name>
-                <type>Float64</type>
-            </attribute>
-            <attribute>
-                <name>x2</name>
-                <type>Float64</type>
-            </attribute>
-        </key>
-        <attribute>
-            <name>y</name>
-            <type>Float64</type>
-            <null_value>0</null_value>
-        </attribute>
-    </structure>
-    <source>
-        <clickhouse>
-            <table>training_data</table>
-        </clickhouse>
-    </source>
-    <layout>
-        <xgboost>
-            <target>y</target>
-            <objective>reg:squarederror</objective>
-            <num_iterations>100</num_iterations>
-            <max_depth>6</max_depth>
-            <eta>0.3</eta>
-        </xgboost>
-    </layout>
-    <lifetime>3600</lifetime>
-</dictionary>
-```
-
-</TabItem>
-</Tabs>
 
 ## Prediction parameters {#prediction-parameters}
 
