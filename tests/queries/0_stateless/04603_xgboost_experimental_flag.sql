@@ -17,7 +17,7 @@ SET allow_experimental_xgboost = 0;
 CREATE DICTIONARY model_04603_xgb (x1 Float64, x2 Float64, y Float64)
 PRIMARY KEY (x1, x2)
 SOURCE(CLICKHOUSE(TABLE 'training_04603'))
-LAYOUT(XGBOOST(target 'y'))
+LAYOUT(XGBOOST())
 LIFETIME(0); -- { serverError SUPPORT_IS_DISABLED }
 
 -- With the setting on, the dictionary is created and predicts successfully.
@@ -26,7 +26,7 @@ SET allow_experimental_xgboost = 1;
 CREATE DICTIONARY model_04603_xgb (x1 Float64, x2 Float64, y Float64)
 PRIMARY KEY (x1, x2)
 SOURCE(CLICKHOUSE(TABLE 'training_04603'))
-LAYOUT(XGBOOST(target 'y' num_iterations 10))
+LAYOUT(XGBOOST(num_iterations 10))
 LIFETIME(0);
 
 SELECT isFinite(predictXGBoost('model_04603_xgb', 1.0, 2.0));
