@@ -99,6 +99,10 @@ LAYOUT(XGBOOST(objective 'reg:squarederror' num_iterations 100 max_depth 6))
 LIFETIME(0);
 ```
 
+:::note
+`LIFETIME` does not cause retraining. A lifetime-triggered reload reuses the persisted model just like `SYSTEM RELOAD DICTIONARY`, even if the source table has changed, so a non-zero `LIFETIME` will not refresh the model as the training data grows. Use `LIFETIME(0)` and retrain by dropping and recreating the dictionary.
+:::
+
 ## Dictionary structure {#dictionary-structure}
 
 An `XGBOOST` dictionary has a fixed shape:

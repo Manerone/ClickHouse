@@ -175,6 +175,18 @@ Pipe XGBoostDictionary::read(const Names &, size_t, size_t) const
 }
 
 
+void XGBoostDictionary::removePersistentFilesOnDrop() const
+{
+    /// The model file is auto-generated and owned solely by this dictionary, so it is safe to delete on
+    /// drop. Removing a missing file is a silent no-op; never throw from the drop path.
+    std::error_code ec;
+    if (std::filesystem::remove(configuration.model_path, ec))
+        LOG_INFO(log, "Removed persisted XGBoost model file {}", configuration.model_path);
+    else if (ec)
+        LOG_WARNING(log, "Could not remove persisted XGBoost model file {}: {}", configuration.model_path, ec.message());
+}
+
+
 void registerDictionaryXGBoost(DictionaryFactory & factory);
 void registerDictionaryXGBoost(DictionaryFactory & factory)
 {

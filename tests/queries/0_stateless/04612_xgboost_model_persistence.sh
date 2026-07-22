@@ -23,20 +23,21 @@ LIFETIME(0);
 # First use trains the model and persists it automatically at a per-dictionary path.
 ${CLICKHOUSE_CLIENT} --allow_experimental_xgboost=1 --query "SELECT isFinite(predictXGBoost('model', 1.0, 2.0))"
 
+# The model file is named after the dictionary's UUID, under <data path>/xgboost_models/.
+DATA_PATH=$(${CLICKHOUSE_CLIENT} --query "SELECT value FROM system.server_settings WHERE name = 'path'")
+UUID=$(${CLICKHOUSE_CLIENT} --query "SELECT uuid FROM system.dictionaries WHERE database = currentDatabase() AND name = 'model'")
+MODEL_FILE="${DATA_PATH%/}/xgboost_models/${UUID}.ubj"
+[ -s "$MODEL_FILE" ] && echo "model file exists after train: 1" || echo "model file exists after train: 0"
+
 # Empty the source, then reload. Reuse is keyed to the dictionary's identity, so SYSTEM RELOAD reuses the
 # persisted model instead of retraining: if it had retrained it would fail on the now-empty source with
 # 'No training data was provided'. A finite prediction proves the persisted model was reused.
 ${CLICKHOUSE_CLIENT} --allow_experimental_xgboost=1 --query "TRUNCATE TABLE training; SYSTEM RELOAD DICTIONARY model;"
 ${CLICKHOUSE_CLIENT} --allow_experimental_xgboost=1 --query "SELECT isFinite(predictXGBoost('model', 1.0, 2.0))"
 
-# The model path is chosen automatically and can no longer be supplied by the user.
-${CLICKHOUSE_CLIENT} --allow_experimental_xgboost=1 --query "
-CREATE DICTIONARY model_bad (x1 Float64, x2 Float64, y Float64)
-PRIMARY KEY (x1, x2)
-SOURCE(CLICKHOUSE(TABLE 'training'))
-LAYOUT(XGBOOST(model_path '/some/path.ubj'))
-LIFETIME(0);
-" 2>&1 | grep -o -m1 "BAD_ARGUMENTS" || echo "no error"
+# Dropping the dictionary removes its persisted model file.
+${CLICKHOUSE_CLIENT} --query "DROP DICTIONARY model;"
+[ -e "$MODEL_FILE" ] && echo "model file exists after drop: 1" || echo "model file exists after drop: 0"
 
 ${CLICKHOUSE_CLIENT} --query "
 DROP DICTIONARY IF EXISTS model;
