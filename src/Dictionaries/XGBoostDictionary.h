@@ -29,6 +29,8 @@ public:
         String target_name;
         /// Hyperparameters as a JSON string, consumed by the XGBoost backend (see XGBoostModel).
         HyperParameters hyper_parameters;
+        /// Filesystem path used to persist the trained model.
+        String model_path;
         DictionaryLifetime dict_lifetime;
     };
 
@@ -53,7 +55,9 @@ public:
 
     double getHitRate() const override { return 1.0; }
 
-    size_t getElementCount() const override { return element_count; }
+    /// This computational dictionary stores no keys; it reports the number of feature columns the model was
+    /// trained on.
+    size_t getElementCount() const override { return model->getFeatureNames().size(); }
 
     /// The whole model is resident in memory, so the load factor is always one.
     double getLoadFactor() const override { return 1.0; }
@@ -103,7 +107,6 @@ private:
     std::unique_ptr<XGBoostModel> model;
 
     size_t bytes_allocated = 0;
-    size_t element_count = 0;
 
     mutable std::atomic<size_t> query_count{0};
 

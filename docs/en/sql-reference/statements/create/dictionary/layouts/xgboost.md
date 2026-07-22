@@ -85,11 +85,18 @@ SELECT dictGet('model', 'y', (1.0, 2.0)) AS prediction;
 
 **Predicting (at query time).** To predict, the model takes the feature vector — in the same order as the key columns were declared — and runs it through the trained booster, returning a `Float64`.
 
-**Updating the model.** Because the model is a dictionary backed by a table, retrain by updating the table and reloading:
+**Persisting the trained model.** The trained model is persisted automatically. On the first load the model is trained and written to a file that ClickHouse names after the dictionary's own identity, in a server-owned directory; every later load — including after a server restart — reuses that file and skips training. The path is not configurable: because the file name is unique to the dictionary, a dictionary can only ever reuse a model it trained itself and can never load one trained by a different dictionary.
+
+**Retraining the model.** Because reuse is keyed to the dictionary's identity, `SYSTEM RELOAD DICTIONARY` reuses the persisted model rather than retraining. To retrain after the training data changes, drop and recreate the dictionary — a recreated dictionary has a fresh identity, so it trains from the current source:
 
 ```sql
 INSERT INTO training_data VALUES (5, 10, 40);
-SYSTEM RELOAD DICTIONARY model;
+DROP DICTIONARY model;
+CREATE DICTIONARY model (x1 Float64, x2 Float64, y Float64)
+PRIMARY KEY (x1, x2)
+SOURCE(CLICKHOUSE(TABLE 'training_data'))
+LAYOUT(XGBOOST(objective 'reg:squarederror' num_iterations 100 max_depth 6))
+LIFETIME(0);
 ```
 
 ## Dictionary structure {#dictionary-structure}
@@ -173,4 +180,3 @@ These mirror the prediction parameters of XGBoost's `XGBoosterPredictFromDMatrix
 - **Computational dictionary semantics.** This is a *computational* dictionary: `dictGet(dict, '<target>', (feature_1, ...))` predicts for the given feature vector (the key is the input to predict, not a stored key), and `dictHas` always returns `1`. The dictionary cannot be read back as a table with `SELECT * FROM dict`.
 - **Numeric columns only.** Every feature (key) column and the target attribute must be a native numeric type. Values are read as floats during training and prediction.
 - **Feature order matters.** `predictXGBoost` binds its positional feature arguments to the key columns in declaration order, and the number of feature arguments must match the number of key columns.
-- **Non-determinism.** `predictXGBoost` is non-deterministic because a dictionary can be reloaded (retrained) under the same name.

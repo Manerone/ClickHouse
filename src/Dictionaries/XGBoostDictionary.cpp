@@ -7,14 +7,18 @@
 #include <Dictionaries/DictionaryFactory.h>
 #include <Dictionaries/DictionaryPipelineExecutor.h>
 #include <Dictionaries/XGBoostModel.h>
+#include <Interpreters/Context.h>
 #include <Interpreters/castColumn.h>
+#include <IO/WriteHelpers.h>
 #include <QueryPipeline/BlockIO.h>
 #include <QueryPipeline/Pipe.h>
+#include <Common/SipHash.h>
 #include <Common/logger_useful.h>
 
 #include <Poco/JSON/Object.h>
 #include <Poco/Util/AbstractConfiguration.h>
 
+#include <filesystem>
 #include <sstream>
 
 
@@ -53,6 +57,22 @@ void XGBoostDictionary::loadData()
     Block header(header_columns);
 
     model = std::make_unique<XGBoostModel>(configuration.hyper_parameters);
+
+    /// The model is persisted at an auto-generated, per-dictionary path (see `registerDictionaryXGBoost`).
+    /// When a model already exists there, it was trained by this dictionary, so reuse it and skip
+    /// training entirely
+    if (std::filesystem::exists(configuration.model_path))
+    {
+        model->loadFromFile(header, configuration.target_name, configuration.model_path);
+
+        LOG_INFO(
+            log,
+            "Loaded XGBoost dictionary with {} feature(s) from model file {}",
+            model->getFeatureNames().size(),
+            configuration.model_path);
+        return;
+    }
+
     model->startTraining(header, configuration.target_name);
 
     BlockIO io = source_ptr->loadAll();
@@ -73,9 +93,13 @@ void XGBoostDictionary::loadData()
 
     model->finalizeTraining();
 
-    element_count = model->getFeatureNames().size();
+    /// Persist the trained model so the next load can reuse it. The parent directory is
+    /// server-owned and may not exist yet on a first-ever save.
+    std::filesystem::create_directories(std::filesystem::path(configuration.model_path).parent_path());
+    model->saveToFile(configuration.model_path);
+    LOG_INFO(log, "Saved trained XGBoost model to {}", configuration.model_path);
 
-    LOG_INFO(log, "Loaded XGBoost dictionary trained on {} feature(s)", element_count);
+    LOG_INFO(log, "Loaded XGBoost dictionary trained on {} feature(s)", model->getFeatureNames().size());
 }
 
 
@@ -159,7 +183,7 @@ void registerDictionaryXGBoost(DictionaryFactory & factory)
                             const Poco::Util::AbstractConfiguration & config,
                             const std::string & config_prefix,
                             DictionarySourcePtr source_ptr,
-                            ContextPtr /* global_context */,
+                            ContextPtr global_context,
                             bool /* created_from_ddl */) -> DictionaryPtr
     {
         /// The structure must be a complex key of one or more numeric feature columns, followed by exactly one
@@ -203,8 +227,7 @@ void registerDictionaryXGBoost(DictionaryFactory & factory)
         Poco::JSON::Object hyper_json;
         for (const auto & key : layout_keys)
         {
-            const String value = config.getString(layout_prefix + "." + key);
-            hyper_json.set(key, value);
+            hyper_json.set(key, config.getString(layout_prefix + "." + key));
         }
 
         std::ostringstream oss;
@@ -212,13 +235,24 @@ void registerDictionaryXGBoost(DictionaryFactory & factory)
 
         const DictionaryLifetime dict_lifetime{config, config_prefix + ".lifetime"};
 
+        const auto dict_id = StorageID::fromDictionaryConfig(config, config_prefix);
+
+        /// Persist each dictionary's model under a server-owned directory at a name derived from the
+        /// dictionary's own identity: its UUID when it has one (DDL dictionaries in an Atomic database), or a
+        /// hash of its qualified name otherwise (XML-configured dictionaries). Because the name is unique to
+        /// the dictionary, a dictionary can only ever reuse a model it trained itself - it can never point at
+        /// a model trained by a different dictionary. UBJSON (`.ubj`) is XGBoost's recommended binary format.
+        const String model_file
+            = dict_id.hasUUID() ? toString(dict_id.uuid) : sipHash128String(dict_id.getFullNameNotQuoted());
+        const std::filesystem::path model_path
+            = std::filesystem::path(global_context->getPath()) / "xgboost_models" / (model_file + ".ubj");
+
         XGBoostDictionary::Configuration cfg{
             .target_name = target_attribute.name,
             .hyper_parameters = oss.str(),
+            .model_path = model_path.string(),
             .dict_lifetime = dict_lifetime,
         };
-
-        const auto dict_id = StorageID::fromDictionaryConfig(config, config_prefix);
 
         return std::make_unique<XGBoostDictionary>(dict_id, dict_struct, std::move(source_ptr), std::move(cfg));
     };
