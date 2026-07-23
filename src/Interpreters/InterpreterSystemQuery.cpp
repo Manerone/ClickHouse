@@ -352,14 +352,29 @@ BlockIO InterpreterSystemQuery::execute()
 {
     auto & query = query_ptr->as<ASTSystemQuery &>();
 
+    using Type = ASTSystemQuery::Type;
+
+    /// Resolve the target dictionary against the current database before the query may be
+    /// dispatched to a cluster. Otherwise, when the cluster nodes receive the query
+    /// it will not have a database specified. Which in the case of RELOAD/UNLOAD DICTIONARY
+    /// may end up either targeting the wrong dictionary or not finding any.
+    if (query.type == Type::RELOAD_DICTIONARY || query.type == Type::UNLOAD_DICTIONARY)
+    {
+        if (query.table)
+        {
+            String dictionary_name = query.database ? query.getDatabase() + "." + query.getTable() : query.getTable();
+            auto qualified_name = getContext()->getExternalDictionariesLoader().qualifyDictionaryNameWithDatabase(dictionary_name, getContext());
+            query.setDatabase(qualified_name.database);
+            query.setTable(qualified_name.table);
+        }
+    }
+
     if (!query.cluster.empty())
     {
         DDLQueryOnClusterParams params;
         params.access_to_check = getRequiredAccessForDDLOnCluster();
         return executeDDLQueryOnCluster(query_ptr, getContext(), params);
     }
-
-    using Type = ASTSystemQuery::Type;
 
     /// Use global context with fresh system profile settings
     auto system_context = Context::createCopy(getContext()->getGlobalContext());
@@ -368,13 +383,7 @@ BlockIO InterpreterSystemQuery::execute()
     bool check_constraints = false;
     system_context->setCurrentProfile(getContext()->getSystemProfileName(), check_constraints);
 
-    /// Make canonical query for simpler processing
-    if (query.type == Type::RELOAD_DICTIONARY || query.type == Type::UNLOAD_DICTIONARY)
-    {
-        if (query.database)
-            query.setTable(query.getDatabase() + "." + query.getTable());
-    }
-    else if (query.table)
+    if (query.table && query.type != Type::RELOAD_DICTIONARY && query.type != Type::UNLOAD_DICTIONARY)
     {
         StorageID id_in_query(query.getDatabase(), query.getTable());
         /// `IF EXISTS` (currently parsed for `SYSTEM SYNC REPLICA`) must suppress
@@ -759,7 +768,8 @@ BlockIO InterpreterSystemQuery::execute()
             getContext()->checkAccess(AccessType::SYSTEM_RELOAD_DICTIONARY);
 
             auto & external_dictionaries_loader = system_context->getExternalDictionariesLoader();
-            external_dictionaries_loader.reloadDictionary(query.getTable(), getContext());
+            String dictionary_name = query.database ? query.getDatabase() + "." + query.getTable() : query.getTable();
+            external_dictionaries_loader.reloadDictionary(dictionary_name, getContext());
 
             ExternalDictionariesLoader::resetAll();
             break;
@@ -779,7 +789,8 @@ BlockIO InterpreterSystemQuery::execute()
             getContext()->checkAccess(AccessType::SYSTEM_RELOAD_DICTIONARY);
 
             auto & external_dictionaries_loader = system_context->getExternalDictionariesLoader();
-            external_dictionaries_loader.unloadDictionary(query.getTable(), getContext());
+            String dictionary_name = query.database ? query.getDatabase() + "." + query.getTable() : query.getTable();
+            external_dictionaries_loader.unloadDictionary(dictionary_name, getContext());
             ExternalDictionariesLoader::resetAll();
             break;
         }
