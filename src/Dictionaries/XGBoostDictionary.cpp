@@ -15,11 +15,9 @@
 #include <Common/SipHash.h>
 #include <Common/logger_useful.h>
 
-#include <Poco/JSON/Object.h>
 #include <Poco/Util/AbstractConfiguration.h>
 
 #include <filesystem>
-#include <sstream>
 
 
 namespace DB
@@ -231,19 +229,16 @@ void registerDictionaryXGBoost(DictionaryFactory & factory)
 
         /// The target is always the single attribute (the only column not part of the feature key), so it is
         /// inferred from the structure and is not a layout parameter. Every layout parameter is an XGBoost
-        /// hyperparameter; the hyperparameters are collected into a JSON object and validated against the
-        /// backend's allowlist when the model trains (see XGBoostModel).
+        /// hyperparameter; the hyperparameters are collected by name and validated against the backend's
+        /// allowlist when the model trains (see XGBoostModel).
         Poco::Util::AbstractConfiguration::Keys layout_keys;
         config.keys(layout_prefix, layout_keys);
 
-        Poco::JSON::Object hyper_json;
+        HyperParameters hyper_parameters;
         for (const auto & key : layout_keys)
         {
-            hyper_json.set(key, config.getString(layout_prefix + "." + key));
+            hyper_parameters.emplace(key, config.getString(layout_prefix + "." + key));
         }
-
-        std::ostringstream oss;
-        hyper_json.stringify(oss);
 
         const DictionaryLifetime dict_lifetime{config, config_prefix + ".lifetime"};
 
@@ -261,7 +256,7 @@ void registerDictionaryXGBoost(DictionaryFactory & factory)
 
         XGBoostDictionary::Configuration cfg{
             .target_name = target_attribute.name,
-            .hyper_parameters = oss.str(),
+            .hyper_parameters = std::move(hyper_parameters),
             .model_path = model_path.string(),
             .dict_lifetime = dict_lifetime,
         };

@@ -2,10 +2,13 @@
 
 #include <Access/Common/AccessFlags.h>
 #include <Columns/ColumnConst.h>
+#include <Columns/ColumnMap.h>
 #include <Columns/ColumnString.h>
 #include <Columns/ColumnsNumber.h>
 #include <Core/Block.h>
+#include <Core/Field.h>
 #include <Core/Settings.h>
+#include <DataTypes/DataTypeMap.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <DataTypes/IDataType.h>
 #include <Dictionaries/XGBoostDictionary.h>
@@ -15,6 +18,8 @@
 #include <Interpreters/Context.h>
 #include <Interpreters/ExternalDictionariesLoader.h>
 #include <Common/Exception.h>
+#include <Common/FieldVisitorConvertToNumber.h>
+#include <Common/FieldVisitors.h>
 #include <Common/logger_useful.h>
 
 namespace DB
@@ -39,12 +44,13 @@ namespace
 
 /// Row-wise inference against an XGBoost dictionary:
 ///
-///     predictXGBoost(dictionary_name, feature1, feature2, ...[, params_json])
+///     predictXGBoost(dictionary_name, feature1, feature2, ...[, params])
 ///
 /// Features are passed as individual columns, positionally: argument i (after the dictionary name) is bound
 /// to the model's i-th feature (the i-th key column, in declaration order). The optional trailing `params`
-/// is a JSON String forwarded to the XGBoost prediction call. This is the same model that
-/// `dictGet(dictionary_name, target, (feature1, ...))` reaches.
+/// is a constant `Map(String, <numeric>)` of XGBoost prediction parameters (for example
+/// `map('type', 0, 'iteration_end', 0)`), forwarded to the XGBoost prediction call. This is the same model
+/// that `dictGet(dictionary_name, target, (feature1, ...))` reaches.
 class FunctionPredictXGBoost final : public IFunction
 {
 public:
@@ -103,6 +109,19 @@ public:
                     getName(),
                     arguments[i].type->getName());
 
+        /// The optional trailing prediction parameters must be a Map from parameter name (String) to a
+        /// numeric value, e.g. map('type', 0) or {'type': 0}.
+        if (feature_end < arguments.size())
+        {
+            const auto * map_type = checkAndGetDataType<DataTypeMap>(arguments.back().type.get());
+            if (!isString(map_type->getKeyType()) || !isNumber(map_type->getValueType()))
+                throw Exception(
+                    ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
+                    "Prediction parameters of function '{}' must be a Map(String, <numeric>), got {}",
+                    getName(),
+                    arguments.back().type->getName());
+        }
+
         /// Fail at analysis time if the named dictionary is missing or does not have the XGBOOST layout.
         validateDictionaryIsXGBoost(arguments);
 
@@ -127,7 +146,7 @@ public:
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "Dictionary '{}' is not an XGBoost dictionary", dictionary_name);
 
         const size_t feature_end = featureEnd(arguments);
-        const String params = feature_end < arguments.size() ? getConstString(arguments.back(), "params") : String{};
+        const PredictParameters params = feature_end < arguments.size() ? buildPredictParams(arguments.back()) : PredictParameters{};
 
         /// Feature names/order the model expects. Each argument column is inserted under the corresponding
         /// name so the dictionary can resolve it by name.
@@ -164,14 +183,34 @@ private:
     ContextPtr context;
     mutable std::atomic<bool> access_checked{false};
 
-    /// Index one past the last feature argument. The trailing `params` (a String) is excluded; everything
+    /// Index one past the last feature argument. The trailing `params` (a Map) is excluded; everything
     /// from index 1 up to this bound is a feature.
-    ///     predictXGBoost(dict, f1, f2, f3)                  -> returns 4
-    ///     predictXGBoost(dict, f1, f2, f3, '{"type":1}')    -> returns 4
+    ///     predictXGBoost(dict, f1, f2, f3)                       -> returns 4
+    ///     predictXGBoost(dict, f1, f2, f3, map('type', 1))       -> returns 4
     static size_t featureEnd(const ColumnsWithTypeAndName & arguments)
     {
-        const bool has_params = arguments.size() >= 3 && isString(arguments.back().type);
+        const bool has_params = arguments.size() >= 3 && WhichDataType(arguments.back().type).isMap();
         return has_params ? arguments.size() - 1 : arguments.size();
+    }
+
+    /// Reads the trailing `params` Map into the structured prediction parameters (name -> integer) the model
+    /// consumes directly.
+    static PredictParameters buildPredictParams(const ColumnWithTypeAndName & arg)
+    {
+        const auto * col = checkAndGetColumnConst<ColumnMap>(arg.column.get());
+        if (!col)
+            throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Argument 'params' of function '{}' must be a constant Map", name);
+
+        const Field field = (*col)[0];
+        const Map & entries = field.safeGet<Map>();
+
+        PredictParameters params;
+        for (const auto & entry : entries)
+        {
+            const Tuple & key_value = entry.safeGet<Tuple>();
+            params.emplace(key_value[0].safeGet<String>(), applyVisitor(FieldVisitorConvertToNumber<Int64>(), key_value[1]));
+        }
+        return params;
     }
 
     void validateDictionaryIsXGBoost(const ColumnsWithTypeAndName & arguments) const
@@ -219,12 +258,15 @@ REGISTER_FUNCTION(PredictXGBoost)
             {"String"}},
            {"featureN", "Numeric feature values, positionally in the dictionary's key order.", {"(U)Int*", "Float*"}},
            {"params",
-            "Optional JSON String of XGBoost prediction parameters. See the "
+            "Optional constant Map of XGBoost prediction parameters, from parameter name to a numeric value, e.g. "
+            "`map('type', 0, 'iteration_end', 0)`. See the "
             "[prediction parameters](/sql-reference/statements/create/dictionary/layouts/xgboost#prediction-parameters) for "
             "the accepted keys.",
-            {"String"}}},
+            {"Map(String, (U)Int*)", "Map(String, Float*)"}}},
         .returned_value = {"The model prediction as Float64, one per row.", {"Float64"}},
-        .examples = {{"Predict", "SELECT predictXGBoost('model', 1.0, 2.0);", "7.0"}},
+        .examples
+        = {{"Predict", "SELECT predictXGBoost('model', 1.0, 2.0);", "7.0"},
+           {"Predict with parameters", "SELECT predictXGBoost('model', 1.0, 2.0, map('type', 0, 'iteration_end', 0));", "7.0"}},
         .introduced_in = {26, 7},
         .category = FunctionDocumentation::Category::MachineLearning});
 }

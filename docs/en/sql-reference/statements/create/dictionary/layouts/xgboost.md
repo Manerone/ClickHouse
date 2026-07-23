@@ -159,13 +159,13 @@ LIFETIME(3600);
 
 ## Prediction parameters {#prediction-parameters}
 
-`predictXGBoost` accepts an optional trailing JSON string of XGBoost prediction parameters, after the features:
+`predictXGBoost` accepts an optional trailing constant `Map` of XGBoost prediction parameters, after the features, built with `map`:
 
 ```sql
-SELECT predictXGBoost('model', 1.0, 2.0, '{"type": 0, "iteration_end": 0}');
+SELECT predictXGBoost('model', 1.0, 2.0, map('type', 0, 'iteration_end', 0));
 ```
 
-These mirror the prediction parameters of XGBoost's `XGBoosterPredictFromDMatrix`. Only the keys below are accepted; any other key, or a value that is not a JSON object, fails the query.
+The parameter names map to the prediction parameters of XGBoost's `XGBoosterPredictFromDMatrix`. Only the keys below are accepted; any other key fails the query. Values are numeric — `strict_shape` is given as `0` or `1`.
 
 | Parameter | Description | Default |
 | --- | --- | --- |

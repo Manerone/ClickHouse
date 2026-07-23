@@ -15,7 +15,6 @@
 
 #include <fmt/format.h>
 #include <Poco/JSON/Object.h>
-#include <Poco/JSON/Parser.h>
 
 #include <limits>
 #include <unordered_map>
@@ -274,9 +273,6 @@ std::unordered_map<String, String> XGBoostModel::sanitizeTrainingParams(const Hy
 {
     std::unordered_map<String, String> sanitized;
 
-    if (params.empty())
-        return sanitized;
-
     static const std::unordered_set<String> allowed_keys{
         "booster",
         "objective",
@@ -307,37 +303,23 @@ std::unordered_map<String, String> XGBoostModel::sanitizeTrainingParams(const Hy
         "num_parallel_tree",
         "num_iterations"};
 
-    Poco::JSON::Parser parser;
-    Poco::Dynamic::Var parsed;
-    try
-    {
-        parsed = parser.parse(params);
-    }
-    catch (const Poco::Exception & e)
-    {
-        throw Exception(ErrorCodes::XGBOOST_ERROR, "Training parameters are not valid JSON: {}", e.displayText());
-    }
-
-    const auto & object = parsed.extract<Poco::JSON::Object::Ptr>();
-    if (object.isNull())
-        throw Exception(ErrorCodes::XGBOOST_ERROR, "Training parameters must be a JSON object");
-
-    for (const auto & [key, value] : *object)
+    for (const auto & [key, value] : params)
     {
         if (!allowed_keys.contains(key))
             throw Exception(ErrorCodes::XGBOOST_ERROR, "Unknown or forbidden training parameter '{}'", key);
+
         // If we found num_iterations, record this value and do not add it to the final map
         if (key == "num_iterations")
         {
             int parsed_iterations = 0;
-            if (!tryParse(parsed_iterations, value.toString()) || parsed_iterations <= 0)
+            if (!tryParse(parsed_iterations, value) || parsed_iterations <= 0)
                 throw Exception(
-                    ErrorCodes::XGBOOST_ERROR, "Parameter 'num_iterations' must be a positive integer, got '{}'", value.toString());
+                    ErrorCodes::XGBOOST_ERROR, "Parameter 'num_iterations' must be a positive integer, got '{}'", value);
             num_iterations = parsed_iterations;
         }
         else
         {
-            sanitized.emplace(key, value.toString());
+            sanitized.emplace(key, value);
         }
     }
 
@@ -354,31 +336,18 @@ String XGBoostModel::sanitizePredictParams(const PredictParameters & params)
     config.set("strict_shape", false);
     config.set("training", false);
 
-    if (!params.empty())
+    static const std::unordered_set<String> allowed_keys{"type", "iteration_begin", "iteration_end", "strict_shape", "ntree_limit"};
+
+    for (const auto & [key, value] : params)
     {
-        static const std::unordered_set<String> allowed_keys{"type", "iteration_begin", "iteration_end", "strict_shape", "ntree_limit"};
+        if (!allowed_keys.contains(key))
+            throw Exception(ErrorCodes::XGBOOST_ERROR, "Unknown or forbidden prediction parameter '{}'", key);
 
-        Poco::JSON::Parser parser;
-        Poco::Dynamic::Var parsed;
-        try
-        {
-            parsed = parser.parse(params);
-        }
-        catch (const Poco::Exception & e)
-        {
-            throw Exception(ErrorCodes::XGBOOST_ERROR, "Prediction parameters are not valid JSON: {}", e.displayText());
-        }
-
-        const auto & object = parsed.extract<Poco::JSON::Object::Ptr>();
-        if (object.isNull())
-            throw Exception(ErrorCodes::XGBOOST_ERROR, "Prediction parameters must be a JSON object");
-
-        for (const auto & [key, value] : *object)
-        {
-            if (!allowed_keys.contains(key))
-                throw Exception(ErrorCodes::XGBOOST_ERROR, "Unknown or forbidden prediction parameter '{}'", key);
+        /// `strict_shape` is a boolean in XGBoost's config; the rest are integers.
+        if (key == "strict_shape")
+            config.set(key, value != 0);
+        else
             config.set(key, value);
-        }
     }
 
     std::ostringstream oss;

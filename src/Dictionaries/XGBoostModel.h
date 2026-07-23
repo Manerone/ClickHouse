@@ -4,6 +4,7 @@
 #include <Core/Block_fwd.h>
 #include <base/types.h>
 
+#include <map>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -13,9 +14,10 @@ namespace DB
 
 struct ColumnWithTypeAndName;
 
-/// Hyperparameters and prediction parameters are passed as JSON strings.
-using HyperParameters = String;
-using PredictParameters = String;
+/// Training hyperparameters as parameter name -> value, assembled from the dictionary layout config
+using HyperParameters = std::map<String, String>;
+/// Prediction parameters
+using PredictParameters = std::map<String, Int64>;
 
 
 /// Extreme Gradient Boosting model, driven directly by XGBoostDictionary.

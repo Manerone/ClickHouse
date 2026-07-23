@@ -81,20 +81,20 @@ SELECT sum(isFinite(predictXGBoost('model_04509_xgb', x1, x2))) FROM inference_0
 
 SELECT 'Positive: predict with prediction parameters';
 
--- An explicit (valid) prediction-parameters JSON as the trailing argument.
-SELECT sum(isFinite(predictXGBoost('model_04509_xgb', x1, x2, '{"iteration_begin": 0, "iteration_end": 0}'))) FROM inference_04509;
-SELECT sum(isFinite(predictXGBoost('model_04509_xgb', x1, x2, '{"type": 0}'))) FROM inference_04509;
+-- Explicit (valid) prediction parameters as a trailing Map.
+SELECT sum(isFinite(predictXGBoost('model_04509_xgb', x1, x2, map('iteration_begin', 0, 'iteration_end', 0)))) FROM inference_04509;
+SELECT sum(isFinite(predictXGBoost('model_04509_xgb', x1, x2, map('type', 0)))) FROM inference_04509;
 
 SELECT 'Negative: prediction parameters';
 
 -- Error: unknown/forbidden prediction parameter.
-SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, '{"not_a_predict_param": 1}'); -- { serverError XGBOOST_ERROR }
+SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, map('not_a_predict_param', 1)); -- { serverError XGBOOST_ERROR }
 
--- Error: prediction parameters are not valid JSON.
-SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, 'not a json'); -- { serverError XGBOOST_ERROR }
+-- Error: prediction-parameter Map value is not numeric.
+SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, map('type', 'x')); -- { serverError ILLEGAL_TYPE_OF_ARGUMENT }
 
--- Error: prediction parameters are valid JSON but not a JSON object.
-SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, '123'); -- { serverError XGBOOST_ERROR }
+-- Error: prediction-parameter Map key is not a String.
+SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, map(1, 2)); -- { serverError ILLEGAL_TYPE_OF_ARGUMENT }
 
 SELECT 'Negative: predictXGBoost arguments';
 
