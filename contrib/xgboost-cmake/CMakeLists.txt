@@ -96,7 +96,7 @@ list(APPEND DMLC_CORE_COMPILE_DEFINITIONS -DDMLC_NANOSLEEP_PRESENT)
 # <cxxabi.h> is provided by the vendored libc++.
 list(APPEND DMLC_CORE_COMPILE_DEFINITIONS -DDMLC_CXXABI_H_PRESENT)
 
-# Not a compile defenition but a build_config.h.in constant.
+# Not a compile definition but a build_config.h.in constant.
 # All ClickHouse target architectures (x86-64, AArch64) are little-endian.
 set(DMLC_CMAKE_LITTLE_ENDIAN 1)
 
