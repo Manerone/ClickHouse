@@ -7,9 +7,9 @@
 #include <Dictionaries/DictionaryFactory.h>
 #include <Dictionaries/DictionaryPipelineExecutor.h>
 #include <Dictionaries/XGBoostModel.h>
+#include <IO/WriteHelpers.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/castColumn.h>
-#include <IO/WriteHelpers.h>
 #include <QueryPipeline/BlockIO.h>
 #include <QueryPipeline/Pipe.h>
 #include <Common/SipHash.h>
@@ -249,8 +249,7 @@ void registerDictionaryXGBoost(DictionaryFactory & factory)
         /// hash of its qualified name otherwise (XML-configured dictionaries). Because the name is unique to
         /// the dictionary, a dictionary can only ever reuse a model it trained itself - it can never point at
         /// a model trained by a different dictionary. UBJSON (`.ubj`) is XGBoost's recommended binary format.
-        const String model_file
-            = dict_id.hasUUID() ? toString(dict_id.uuid) : sipHash128String(dict_id.getFullNameNotQuoted());
+        const String model_file = dict_id.hasUUID() ? toString(dict_id.uuid) : sipHash128String(dict_id.getFullNameNotQuoted());
         const std::filesystem::path model_path
             = std::filesystem::path(global_context->getPath()) / "xgboost_models" / (model_file + ".ubj");
 

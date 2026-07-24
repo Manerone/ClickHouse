@@ -334,7 +334,7 @@ public:
 
     /// Called only when the dictionary is dropped (not on reload or server shutdown). Lets a
     /// dictionary delete any files it persisted on disk. Best-effort; must not throw. Default: nothing.
-    virtual void removePersistentFilesOnDrop() const {}
+    virtual void removePersistentFilesOnDrop() const { }
 
     std::shared_ptr<IDictionary> shared_from_this()
     {

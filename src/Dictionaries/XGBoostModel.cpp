@@ -313,8 +313,7 @@ std::unordered_map<String, String> XGBoostModel::sanitizeTrainingParams(const Hy
         {
             int parsed_iterations = 0;
             if (!tryParse(parsed_iterations, value) || parsed_iterations <= 0)
-                throw Exception(
-                    ErrorCodes::XGBOOST_ERROR, "Parameter 'num_iterations' must be a positive integer, got '{}'", value);
+                throw Exception(ErrorCodes::XGBOOST_ERROR, "Parameter 'num_iterations' must be a positive integer, got '{}'", value);
             num_iterations = parsed_iterations;
         }
         else
