@@ -49,8 +49,7 @@ public:
     /// model's feature count is validated against it. After this the model is ready to predict.
     void loadFromFile(const Block & header, const String & target_column, const String & path);
 
-    /// Persist the trained model to `path` in XGBoost's native format (the format is chosen from the file
-    /// extension - `.ubj` for UBJSON, `.json` for JSON) so a later load can skip training. Must be called
+    /// Persist the trained model to `path` in XGBoost's native format. Must be called
     /// after `finalizeTraining`.
     void saveToFile(const String & path) const;
 

@@ -241,11 +241,6 @@ void registerDictionaryXGBoost(DictionaryFactory & factory)
 
         const auto dict_id = StorageID::fromDictionaryConfig(config, config_prefix);
 
-        /// Persist each dictionary's model under a server-owned directory at a name derived from the
-        /// dictionary's own identity: its UUID when it has one (DDL dictionaries in an Atomic database), or a
-        /// hash of its qualified name otherwise (XML-configured dictionaries). Because the name is unique to
-        /// the dictionary, a dictionary can only ever reuse a model it trained itself - it can never point at
-        /// a model trained by a different dictionary. UBJSON (`.ubj`) is XGBoost's recommended binary format.
         const String model_file = dict_id.hasUUID() ? toString(dict_id.uuid) : sipHash128String(dict_id.getFullNameNotQuoted());
         const std::filesystem::path model_path
             = std::filesystem::path(global_context->getPath()) / "xgboost_models" / (model_file + ".ubj");
