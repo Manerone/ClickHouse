@@ -75,9 +75,6 @@ void XGBoostDictionary::loadData()
 
     BlockIO io = source_ptr->loadAll();
 
-    /// Stream the source rows into the model block by block, so the whole dataset never has to be
-    /// materialized at once. The source delivers the columns cast to the declared types; the backend reads
-    /// them as floats.
     io.executeWithCallbacks(
         [&]()
         {

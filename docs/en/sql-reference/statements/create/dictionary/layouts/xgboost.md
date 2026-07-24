@@ -173,14 +173,14 @@ The parameter names map to the prediction parameters of XGBoost's `XGBoosterPred
 
 | Parameter | Description | Default |
 | --- | --- | --- |
-| `type` | Prediction type: `0` value, `1` margin, `2` SHAP contributions, `3` approximate contributions, `4` feature interactions, `5` approximate interactions, `6` leaf index. | `0` |
+| `type` | Prediction type. Only `0` (value) and `1` (margin) are accepted, because `predictXGBoost` returns a single `Float64` per row. Other XGBoost types (`2`/`3` SHAP contributions, `4`/`5` feature interactions, `6` leaf index) emit several values per row and are rejected. | `0` |
 | `iteration_begin` | First boosting iteration (tree) to include in the prediction. | `0` |
 | `iteration_end` | Last boosting iteration to include; `0` uses all trees. | `0` |
 | `strict_shape` | Apply stricter output-shape rules. | `false` |
 | `ntree_limit` | Deprecated; limits the number of trees used. Prefer `iteration_begin` / `iteration_end`. | — |
 
 :::note
-`predictXGBoost` returns exactly one `Float64` per input row, so only prediction types that produce a single value per row are meaningful. Types that emit several values per row - such as SHAP contributions (`2`, `3`) or feature interactions (`4`, `5`) - are not supported by this function.
+`predictXGBoost` returns exactly one `Float64` per input row, so only prediction types that produce a single value per row are accepted: `0` (value) and `1` (margin). Types that emit several values per row - such as SHAP contributions (`2`, `3`) or feature interactions (`4`, `5`) - are rejected with an error.
 :::
 
 ## Notes {#notes}

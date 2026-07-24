@@ -93,6 +93,10 @@ SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, map('not_a_predict_param', 1)
 -- Error: prediction-parameter Map value is not numeric.
 SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, map('type', 'x')); -- { serverError ILLEGAL_TYPE_OF_ARGUMENT }
 
+-- Error: prediction 'type' other than 0 (value) or 1 (margin) emits several values per row and is unsupported.
+SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, map('type', 2)); -- { serverError XGBOOST_ERROR }
+SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, map('type', 4)); -- { serverError XGBOOST_ERROR }
+
 -- Error: prediction-parameter Map key is not a String.
 SELECT predictXGBoost('model_04509_xgb', 1.0, 2.0, map(1, 2)); -- { serverError ILLEGAL_TYPE_OF_ARGUMENT }
 

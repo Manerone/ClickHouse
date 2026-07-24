@@ -342,6 +342,13 @@ String XGBoostModel::sanitizePredictParams(const PredictParameters & params)
         if (!allowed_keys.contains(key))
             throw Exception(ErrorCodes::XGBOOST_ERROR, "Unknown or forbidden prediction parameter '{}'", key);
 
+        if (key == "type" && value != 0 && value != 1)
+            throw Exception(
+                ErrorCodes::XGBOOST_ERROR,
+                "Unsupported prediction 'type' {}. Only 0 (value) and 1 (margin) are supported, "
+                "because predictXGBoost returns a single Float64 per row",
+                value);
+
         /// `strict_shape` is a boolean in XGBoost's config; the rest are integers.
         if (key == "strict_shape")
             config.set(key, value != 0);
