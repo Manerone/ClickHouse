@@ -7,6 +7,10 @@ description: 'Configure XGBOOST dictionaries to train a gradient-boosted model a
 doc_type: 'reference'
 ---
 
+import CloudNotSupportedBadge from '@theme/badges/CloudNotSupportedBadge';
+
+<CloudNotSupportedBadge />
+
 The `xgboost` (`XGBOOST`) dictionary trains an [XGBoost](https://xgboost.readthedocs.io/) gradient-boosted model once, at load time, from a source table of training rows, then predicts a numeric target for any feature vector you pass in. The feature columns are the dictionary key and the single attribute is the target the model learns.
 
 It is suited to tabular regression and classification where the features are numeric — for example forecasting a value from several measurements, or scoring rows against a learned target.
