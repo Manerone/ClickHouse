@@ -143,7 +143,7 @@ void XGBoostModel::addTrainingData(const Block & batch)
         label_col = col_with_type_and_name.column.get();
         throwIfTypeIsInvalid(col_with_type_and_name);
     }
-    assert(label_col);
+    chassert(label_col);
 
     flattened_features.reserve(ingested_rows + (rows * n_features));
     labels.reserve(ingested_rows + rows);
@@ -165,8 +165,8 @@ void XGBoostModel::finalizeTraining()
         throw Exception(ErrorCodes::XGBOOST_ERROR, "No training data was provided");
 
 
-    assert(labels.size() == ingested_rows);
-    assert(flattened_features.size() == ingested_rows * n_features);
+    chassert(labels.size() == ingested_rows);
+    chassert(flattened_features.size() == ingested_rows * n_features);
 
     throwOnError(
         XGDMatrixCreateFromMat(flattened_features.data(), ingested_rows, n_features, std::numeric_limits<float>::quiet_NaN(), &dmatrix));
@@ -258,7 +258,7 @@ ColumnPtr XGBoostModel::predict(const Block & batch, const PredictParameters & p
             out_len *= out_shape[i];
 
         // Should have predicted the number of inputted rows
-        assert(rows == out_len);
+        chassert(rows == out_len);
 
         auto & data = result->getData();
         data.resize(out_len);

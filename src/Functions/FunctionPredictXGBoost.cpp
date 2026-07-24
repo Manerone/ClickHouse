@@ -51,13 +51,13 @@ namespace
 /// is a constant `Map(String, <numeric>)` of XGBoost prediction parameters (for example
 /// `map('type', 0, 'iteration_end', 0)`), forwarded to the XGBoost prediction call. This is the same model
 /// that `dictGet(dictionary_name, target, (feature1, ...))` reaches.
-class FunctionPredictXGBoost final : public IFunction
+class FunctionPredictXGBoost final : public IFunction, WithContext
 {
 public:
     static constexpr auto name = "predictXGBoost";
 
     explicit FunctionPredictXGBoost(ContextPtr context_)
-        : context(std::move(context_))
+        : WithContext(context_)
     {
     }
     static FunctionPtr create(ContextPtr context_)
@@ -132,6 +132,7 @@ public:
     {
         const String dictionary_name = getConstString(arguments[0], "dictionary name");
 
+        auto context = getContext();
         auto dictionary = context->getExternalDictionariesLoader().getDictionary(dictionary_name, context);
 
         if (!access_checked.load(std::memory_order_relaxed))
@@ -180,7 +181,6 @@ public:
     }
 
 private:
-    ContextPtr context;
     mutable std::atomic<bool> access_checked{false};
 
     /// Index one past the last feature argument. The trailing `params` (a Map) is excluded; everything
@@ -220,6 +220,7 @@ private:
             throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Argument 'dictionary name' of function '{}' must be a constant String", getName());
 
         const String dictionary_name = name_col->getValue<String>();
+        auto context = getContext();
         const auto layout_type = context->getExternalDictionariesLoader().getDictionaryLayoutType(dictionary_name, context);
         if (layout_type != "xgboost")
             throw Exception(
