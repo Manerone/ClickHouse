@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <memory>
-#include <vector>
 
 #include <Columns/IColumn.h>
 #include <Dictionaries/DictionaryStructure.h>
@@ -94,7 +93,7 @@ public:
 
     /// Names of the feature columns in training order (the key columns, in declaration order). Used by
     /// `predictXGBoost` to bind its positional feature arguments to the columns the model expects.
-    const std::vector<String> & getFeatureNames() const;
+    const VectorWithMemoryTracking<String> & getFeatureNames() const;
 
     /// Runs inference on a block whose columns are the features (named as in `getFeatureNames`), returning a
     /// Float64 column of predictions with one element per row.

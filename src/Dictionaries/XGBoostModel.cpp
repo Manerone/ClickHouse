@@ -16,8 +16,10 @@
 #include <fmt/format.h>
 #include <Poco/JSON/Object.h>
 
+#include <Common/UnorderedMapWithMemoryTracking.h>
+#include <Common/VectorWithMemoryTracking.h>
+
 #include <limits>
-#include <unordered_map>
 #include <unordered_set>
 
 namespace DB
@@ -126,7 +128,7 @@ void XGBoostModel::addTrainingData(const Block & batch)
     if (rows == 0)
         return;
 
-    std::vector<const IColumn *> feature_cols;
+    VectorWithMemoryTracking<const IColumn *> feature_cols;
     feature_cols.reserve(n_features);
     for (const auto & name : feature_columns)
     {
@@ -212,12 +214,12 @@ ColumnPtr XGBoostModel::predict(const Block & batch, const PredictParameters & p
     if (rows == 0)
         return ColumnFloat64::create();
 
-    std::vector<const IColumn *> feature_cols;
+    VectorWithMemoryTracking<const IColumn *> feature_cols;
     feature_cols.reserve(n_features);
     for (const auto & name : feature_columns)
         feature_cols.push_back(batch.getByName(name).column.get());
 
-    std::vector<float> features;
+    VectorWithMemoryTracking<float> features;
 
     features.reserve(rows * n_features);
 
@@ -269,11 +271,11 @@ ColumnPtr XGBoostModel::predict(const Block & batch, const PredictParameters & p
     return result;
 }
 
-std::unordered_map<String, String> XGBoostModel::sanitizeTrainingParams(const HyperParameters & params)
+UnorderedMapWithMemoryTracking<String, String> XGBoostModel::sanitizeTrainingParams(const HyperParameters & params)
 {
-    std::unordered_map<String, String> sanitized;
+    UnorderedMapWithMemoryTracking<String, String> sanitized;
 
-    static const std::unordered_set<String> allowed_keys{
+    static const std::unordered_set<String> allowed_keys{ // STYLE_CHECK_ALLOW_STD_CONTAINERS
         "booster",
         "objective",
         "eval_metric",
@@ -335,7 +337,8 @@ String XGBoostModel::sanitizePredictParams(const PredictParameters & params)
     config.set("strict_shape", false);
     config.set("training", false);
 
-    static const std::unordered_set<String> allowed_keys{"type", "iteration_begin", "iteration_end", "strict_shape", "ntree_limit"};
+    static const std::unordered_set<String> allowed_keys{ // STYLE_CHECK_ALLOW_STD_CONTAINERS
+        "type", "iteration_begin", "iteration_end", "strict_shape", "ntree_limit"};
 
     for (const auto & [key, value] : params)
     {
@@ -356,7 +359,8 @@ String XGBoostModel::sanitizePredictParams(const PredictParameters & params)
             config.set(key, value);
     }
 
-    std::ostringstream oss;
+    /// `Poco::JSON::Object::stringify` requires a `std::ostream`
+    std::ostringstream oss; // STYLE_CHECK_ALLOW_STD_STRING_STREAM
     config.stringify(oss);
     return oss.str();
 }

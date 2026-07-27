@@ -3,11 +3,11 @@
 #include <Columns/IColumn_fwd.h>
 #include <Core/Block_fwd.h>
 #include <base/types.h>
+#include <Common/MapWithMemoryTracking.h>
+#include <Common/UnorderedMapWithMemoryTracking.h>
+#include <Common/VectorWithMemoryTracking.h>
 
-#include <map>
 #include <mutex>
-#include <unordered_map>
-#include <vector>
 
 namespace DB
 {
@@ -15,9 +15,9 @@ namespace DB
 struct ColumnWithTypeAndName;
 
 /// Training hyperparameters as parameter name -> value, assembled from the dictionary layout config
-using HyperParameters = std::map<String, String>;
+using HyperParameters = MapWithMemoryTracking<String, String>;
 /// Prediction parameters
-using PredictParameters = std::map<String, Int64>;
+using PredictParameters = MapWithMemoryTracking<String, Int64>;
 
 
 /// Extreme Gradient Boosting model, driven directly by XGBoostDictionary.
@@ -59,7 +59,7 @@ public:
 
     /// Names of the feature columns, in the order the model was trained on. Used by the dictionary to bind
     /// the positional feature arguments of `predictXGBoost` to the columns the backend expects.
-    const std::vector<String> & getFeatureNames() const { return feature_columns; }
+    const VectorWithMemoryTracking<String> & getFeatureNames() const { return feature_columns; }
 
 private:
     /// Record the training schema: `target_column` is the label, every other column of `header` a feature.
@@ -68,7 +68,7 @@ private:
 
     void throwIfTypeIsInvalid(const ColumnWithTypeAndName & col);
 
-    std::unordered_map<String, String> sanitizeTrainingParams(const HyperParameters & params);
+    UnorderedMapWithMemoryTracking<String, String> sanitizeTrainingParams(const HyperParameters & params);
     String sanitizePredictParams(const PredictParameters & params);
 
     /// XGBoost C-API handles. `BoosterHandle` and `DMatrixHandle` are `void *`, kept opaque here so this
@@ -82,16 +82,16 @@ private:
     /// Target column.
     String target_column;
     /// Name of the feature columns.
-    std::vector<String> feature_columns;
+    VectorWithMemoryTracking<String> feature_columns;
     /// Number of features.
     std::size_t n_features = 0;
     /// Number of rows already ingested.
     std::size_t ingested_rows = 0;
 
     /// Keeps the features in a flattened vector.
-    std::vector<float> flattened_features;
+    VectorWithMemoryTracking<float> flattened_features;
     /// Vector of labels.
-    std::vector<float> labels;
+    VectorWithMemoryTracking<float> labels;
 
     /// A trained model is shared through the dictionary, so concurrent predictXGBoost / dictGet queries
     /// would otherwise race inside XGBoosterPredict, which writes into a prediction buffer owned by the booster.

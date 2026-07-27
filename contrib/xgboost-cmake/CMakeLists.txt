@@ -1,5 +1,3 @@
-# TODO: optimizations, instinsics. See libs' cmake/
-
 set(XGBOOST_DIR "${ClickHouse_SOURCE_DIR}/contrib/xgboost")
 set(XGBOOST_BINARY_DIR "${ClickHouse_BINARY_DIR}/contrib/xgboost")
 set(XGBOOST_SOURCE_DIR "${XGBOOST_DIR}/src")
@@ -12,10 +10,10 @@ set(DMLC_CORE_INCLUDE_DIR "${DMLC_CORE_LIB}/include")
 
 # dmlc-core
 #
-# Build-time CMake checks (check_symbol_exists, check_include_file_cxx,
-# test_big_endian, check_cxx_compiler_flag, check_library_exists, ...) are
-# forbidden in ClickHouse because the compiler and toolchain are fixed. The
-# probes below are therefore resolved statically from the known target.
+# Build-time CMake capability probes (for symbols, headers, compiler flags,
+# libraries, endianness, ...) are forbidden in ClickHouse because the compiler
+# and toolchain are fixed. The values below are resolved statically
+# from the known target.
 
 # find contrib/xgboost/dmlc-core/src/ -type f -name "*.cc"
 set(DMLC_CORE_SOURCES

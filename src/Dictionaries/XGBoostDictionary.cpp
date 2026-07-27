@@ -98,7 +98,7 @@ void XGBoostDictionary::loadData()
 }
 
 
-const std::vector<String> & XGBoostDictionary::getFeatureNames() const
+const VectorWithMemoryTracking<String> & XGBoostDictionary::getFeatureNames() const
 {
     return model->getFeatureNames();
 }
