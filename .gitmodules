@@ -420,3 +420,6 @@
 [submodule "contrib/dmlc-core"]
 	path = contrib/dmlc-core
 	url = https://github.com/dmlc/dmlc-core
+[submodule "contrib/libucontext"]
+	path = contrib/libucontext
+	url = https://github.com/kaniini/libucontext
