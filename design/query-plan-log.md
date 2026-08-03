@@ -117,6 +117,40 @@ Scope:
   shape, and showing where the time went. Comparing two executions, and everything else the goal describes, comes
   later.
 
+#### Rendering libraries {#ui-libraries}
+
+The UI can be built on HTML and JavaScript, so that the same code can be wrapped in an Electron application, opened as a
+local file, or later embedded in the website or in the server's own web UI.
+
+Three constraints narrow the choice of libraries: assets have to be vendored rather than loaded from a CDN, since the
+server must work in an air-gapped deployment; the license has to be compatible with Apache 2.0; and the pages the
+server serves today are plain HTML with no build step.
+
+There are two decisions here, not one: which library computes the layout, and which one draws it and handles
+interaction.
+
+* **Graphviz via [Viz.js](https://github.com/mdaines/viz-js)** (MIT, bundling Graphviz and Expat) is already vendored
+  as `programs/server/js/viz-standalone.js` and is what `/processors-profile` uses to draw pipelines from `DOT`. It
+  costs nothing new, needs no build step, and produces good layered layouts. It renders a static SVG, so panning,
+  zooming, collapsing and tooltips have to be added on top — which is exactly what `processors_profile.html` does
+  today. The bundle is 1.4 MB.
+* **[`@dagrejs/dagre`](https://github.com/dagrejs/dagre)** (MIT) computes layered DAG layouts and nothing else; the
+  drawing is left to the caller. It is the maintained fork; the original `dagre` package has not been released in
+  years.
+* **[elkjs](https://github.com/kieler/elkjs)** (EPL-2.0 or GPL-3.0-or-later) produces the best layered layouts of the
+  three and understands ports, which maps well onto operator inputs and outputs. The dual license requires a legal
+  check before it can be a dependency.
+* **[Cytoscape.js](https://js.cytoscape.org/)** (MIT, including its first-party extensions) is a complete interactive
+  graph renderer — pan, zoom, collapse, styling — usable from plain JavaScript with no build step, with a `dagre`
+  layout extension.
+* **[React Flow](https://reactflow.dev/)** (`@xyflow/react`, MIT) gives the richest node-based UI, at the price of
+  React and a build step. That is fine for a standalone Electron or web application and for the docs site, but it does
+  not fit the server's built-in pages as they are built today.
+
+Prior art worth studying: [pev2](https://github.com/dalibo/pev2), the PostgreSQL execution plan visualizer (Vue,
+PostgreSQL license). It solves the same problem for Postgres, and it ships as a single self-contained HTML file that
+works offline — a plausible distribution model here as well.
+
 ## 4. Open design choices {#open-design-choices}
 
 Everything listed here is deliberately unresolved and is to be settled.
@@ -148,7 +182,7 @@ view) directly instead of fetching a blob.
   with the usual index and projection support.
 * Less flexible: adding a field means changing the schema, and heterogeneous per-operator attributes fit awkwardly into
   a fixed set of columns.
-* The external UI has to understand our schema and reassemble the tree, rather than consuming a self-describing
+* The external UI has to understand the schema and reassemble the tree, rather than consuming a self-describing
   document.
 
 Worth considering as a variant: the two are not mutually exclusive, because the storage format and the export format
@@ -156,4 +190,4 @@ need not be the same thing. A structured table plus a function that renders a pl
 benefits and still hands the UI a document; the cost is one more conversion to maintain and version.
 
 Whatever is chosen, both entry points must be derived from the same rows, and the format the external UI consumes has
-to be versioned — it becomes a contract with tools we do not control.
+to be versioned — it becomes a contract with third-party tools.
