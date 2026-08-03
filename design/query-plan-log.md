@@ -117,6 +117,29 @@ Scope:
   shape, and showing where the time went. Comparing two executions, and everything else the goal describes, comes
   later.
 
+#### Plan-level, not pipeline-level {#plan-level-view}
+
+The existing `/processors-profile` page draws the *pipeline*, and a pipeline is the plan replicated once per execution
+lane, so the same branch appears once per thread. TPC-H Q3 on a 32-core machine produces 1088 processor nodes over a
+few dozen distinct plan steps: 305 `ExpressionTransform`, 192 `SimpleSquashingTransform`, 88 `MergeTreeSelect`, 64
+`JoiningTransform`. The graph is mostly duplication, and finding the expensive part means reading the same subtree
+thirty-two times.
+
+![One read lane repeated per thread in the `/processors-profile` graph](processors-profile-duplication.png)
+
+The screenshot shows a fragment of that graph: the same `MergeTreeSelect` → `ExpressionTransform` →
+`ExpressionTransform` → `AggregatingTransform` chain, once per thread, each with its own timing, all converging on a
+single `Resize`. Every lane carries the same information; only the numbers differ.
+
+That page cannot collapse the duplicates. `EXPLAIN PIPELINE compact = 1` merges repeated chains into one node with a
+multiplier, but then the node identifiers no longer match the `processor_uniq_id` values in
+`system.processors_profile_log` and the per-processor overlay breaks, so the page uses `compact = 0` deliberately.
+
+A plan-level view does not have this problem: one node per plan step, with parallelism as an attribute of the node —
+number of processors, and the distribution of active time across them — rather than as thirty-two copies of the node.
+That is already how `EXPLAIN ANALYZE` reports each step group, and it is the main reason the UI renders stored plans
+instead of reconstructed pipelines.
+
 #### Rendering libraries {#ui-libraries}
 
 The UI can be built on HTML and JavaScript, so that the same code can be wrapped in an Electron application, opened as a
