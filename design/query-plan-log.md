@@ -78,7 +78,7 @@ Not in this milestone: `log_query_plan_verbosity`, `log_query_plans_min_query_du
 and the external UI.
 
 The MVP schema of `system.query_plan_log` is explicitly not the final one. It is shaped by what the ASCII rendering needs, and the storage layout
-question ([§4](#open-storage-layout)) stays open — deciding it will change this table. 
+question ([§5](#open-storage-layout)) stays open — deciding it will change this table. 
 
 ### Milestone 2 — better metrics and full control {#milestone-2}
 
@@ -108,9 +108,9 @@ Scope:
 
 * **The final schema of `system.query_plan_log`.** This comes first: the MVP schema was shaped by what the ASCII
   rendering needed, and by now the metric set from Milestone 2 is known, so the storage layout question
-  ([§4](#open-storage-layout)) can be settled and the table given the shape it keeps. Everything below depends on it.
+  ([§5](#open-storage-layout)) can be settled and the table given the shape it keeps. Everything below depends on it.
 * **The machine-readable export.** Whatever the storage layout turns out to be
-  ([§4](#open-storage-layout)), this is the format an external tool consumes, and it is a contract: versioned,
+  ([§5](#open-storage-layout)), this is the format an external tool consumes, and it is a contract: versioned,
   documented, and stable enough that a UI built against it keeps working across server upgrades.
 * **A first version of the external UI.** It reads plans from `system.query_plan_log` and draws them as a tree or graph
   with per-operator time and rows. The initial version only has to make one plan legible — picking a query, showing the
@@ -142,39 +142,117 @@ instead of reconstructed pipelines.
 
 #### Rendering libraries {#ui-libraries}
 
-The UI can be built on HTML and JavaScript, so that the same code can be wrapped in an Electron application, opened as a
+The UI is built on HTML and JavaScript, so that the same code can be wrapped in an Electron application, opened as a
 local file, or later embedded in the website or in the server's own web UI.
 
-Three constraints narrow the choice of libraries: assets have to be vendored rather than loaded from a CDN, since the
-server must work in an air-gapped deployment; the license has to be compatible with Apache 2.0; and the pages the
-server serves today are plain HTML with no build step.
+Three constraints narrow the choice. Assets have to be vendored rather than loaded from a CDN, since the server must
+work in an air-gapped deployment. The license has to be compatible with Apache 2.0. And the file the server serves
+should be the file a developer edits, the way every page under `programs/server` works today — a generated bundle would
+put two copies of the same program in the repository, one of them unreadable, with nothing but a CI check to keep them
+in agreement.
 
-There are two decisions here, not one: which library computes the layout, and which one draws it and handles
-interaction.
+There are three decisions here, not one: what computes the layout, what draws it and handles interaction, and how our
+own code is written. The last one is what actually decides whether a build step exists, and it is independent of the
+other two.
 
-* **Graphviz via [Viz.js](https://github.com/mdaines/viz-js)** (MIT, bundling Graphviz and Expat) is already vendored
-  as `programs/server/js/viz-standalone.js` and is what `/processors-profile` uses to draw pipelines from `DOT`. It
-  costs nothing new, needs no build step, and produces good layered layouts. It renders a static SVG, so panning,
-  zooming, collapsing and tooltips have to be added on top — which is exactly what `processors_profile.html` does
-  today. The bundle is 1.4 MB.
-* **[`@dagrejs/dagre`](https://github.com/dagrejs/dagre)** (MIT) computes layered DAG layouts and nothing else; the
-  drawing is left to the caller. It is the maintained fork; the original `dagre` package has not been released in
-  years.
-* **[elkjs](https://github.com/kieler/elkjs)** (EPL-2.0 or GPL-3.0-or-later) produces the best layered layouts of the
-  three and understands ports, which maps well onto operator inputs and outputs. The dual license requires a legal
-  check before it can be a dependency.
-* **[Cytoscape.js](https://js.cytoscape.org/)** (MIT, including its first-party extensions) is a complete interactive
-  graph renderer — pan, zoom, collapse, styling — usable from plain JavaScript with no build step, with a `dagre`
-  layout extension.
-* **[React Flow](https://reactflow.dev/)** (`@xyflow/react`, MIT) gives the richest node-based UI, at the price of
-  React and a build step. That is fine for a standalone Electron or web application and for the docs site, but it does
-  not fit the server's built-in pages as they are built today.
+**Layout: Graphviz, via the already vendored [Viz.js](https://github.com/mdaines/viz-js).**
+`programs/server/js/viz-standalone.js` (MIT, bundling Graphviz and Expat, 1.4 MB) is in the tree and is what
+`/processors-profile` uses today. It is used here as a *layout engine only*: besides `renderString`, it exposes
+`renderJSON` and supports the `json`, `dot_json`, `xdot_json`, `plain` and `plain-ext` output formats, all of which
+return node and edge coordinates rather than a finished picture. So the plan is emitted as `DOT`, Graphviz assigns
+positions, and we draw from those positions. This is the opposite of what `processors_profile.html` does, and it is
+what lets each node be a live HTML element instead of a shape inside a rendered SVG that per-processor statistics have
+to be overlaid onto by identifier.
+
+Graphviz costs nothing new, produces better layered layouts than the alternatives, and handles DAGs, clusters and
+edge routing. It runs as WebAssembly, so layout is asynchronous.
+
+**Rendering and interaction: our own, on top of those coordinates.** Nothing off the shelf fits well enough to be worth
+the dependency, and the part that is genuinely hard — the layout — is already solved by Graphviz. What remains is a
+small library of our own:
+
+* placing each operator as an HTML element at the coordinates Graphviz returned, so a node can be a card with a table
+  of metrics rather than a labelled shape;
+* drawing edges as paths through the returned control points, with stroke width carrying the row count so that data
+  volume is visible without reading a number;
+* panning, zooming, fit-to-view and centre-on-node;
+* collapsing a subtree, which means re-running layout on a reduced graph and interpolating between the two coordinate
+  sets;
+* the per-operator colour encoding — time, rows, memory, estimation error — which is the part that decides whether the
+  view is useful, and which no library would have given us anyway.
+
+Keeping this in our own code also keeps the authoring question closed: it is plain JavaScript, so there is no build
+step, no generated artifact, and the page stays editable in place like `play.html` and `dashboard.html`. The same
+module can then be reused by a standalone single-file build and by the documentation site.
+
+The alternatives were considered and rejected. [`@dagrejs/dagre`](https://github.com/dagrejs/dagre) (MIT) is a fine
+layered-layout library and vendors cleanly — its ESM build is 48 KB and fully self-contained — but Graphviz is already
+present and lays out better, so it would be a second dependency doing a job we can already do.
+[elkjs](https://github.com/kieler/elkjs) understands ports, which maps neatly onto operator inputs and outputs, but it
+is EPL-2.0 or GPL-3.0-or-later and the dual license needs a legal check before it could be a dependency.
+[Cytoscape.js](https://js.cytoscape.org/) (MIT) is a complete interactive graph renderer usable with no build step, but
+it draws to a canvas, so operator cards would have to be HTML overlays positioned on top of it — which fights the one
+requirement that matters most here. [React Flow](https://reactflow.dev/) (`@xyflow/react`, MIT) gives the richest
+node-based UI and is the natural pairing with an external layout engine, but it is React: JSX is not practically
+optional, so it implies a build step and a committed bundle. That is acceptable for a standalone application or the
+docs site, and not for a page served out of `programs/server`.
 
 Prior art worth studying: [pev2](https://github.com/dalibo/pev2), the PostgreSQL execution plan visualizer (Vue,
-PostgreSQL license). It solves the same problem for Postgres, and it ships as a single self-contained HTML file that
-works offline — a plausible distribution model here as well.
+PostgreSQL license). It solves the same problem for Postgres and is a working demonstration of the approach chosen
+here — it uses a layout algorithm (`d3-flextree`) and no graph-rendering library at all, drawing nodes as HTML inside
+SVG `foreignObject` elements, edges as hand-built Bézier paths weighted by row count, and pan and zoom through
+`d3.zoom`. It also ships as a single self-contained HTML file that works offline, which is a plausible distribution
+model here as well.
 
-## 4. Open design choices {#open-design-choices}
+## 4. Prior art {#prior-art}
+
+Every major vendor gives users a way to see how a query was executed after it finished, and none of them asks the user
+to run the query a second time to get it. The differences are in what is stored, who renders it, and how long it is
+kept.
+
+| Vendor | Capture | Stored as | Queryable as data | UI |
+|---|---|---|---|---|
+| Snowflake | Always on | One row per operator: `OPERATOR_ID`, `PARENT_OPERATORS` (array), `OPERATOR_TYPE`, and three semi-structured columns — `OPERATOR_STATISTICS`, `EXECUTION_TIME_BREAKDOWN`, `OPERATOR_ATTRIBUTES` | Yes, via `GET_QUERY_OPERATOR_STATS`, for the past 14 days | Snowsight Query Profile: a DAG with the percentage of execution time per node |
+| BigQuery | Always on | A document embedded in the job resource: stages containing steps, with per-stage wait, read, compute and write times for the average and the slowest worker, record counts, and a sampled timeline | Through `jobs.get` and `INFORMATION_SCHEMA.JOBS` | Console execution graph, deep-linkable per job |
+| Redshift | Always on | System views: `SYS_QUERY_HISTORY`, `SYS_QUERY_DETAIL` (per-step rows, bytes, time), `SYS_QUERY_EXPLAIN` | Yes, plain SQL | Console query profiler, a pure renderer over those views |
+| Databricks | Always on | A query profile document, downloadable as JSON and importable into any other workspace | Only query-level metrics, in `system.query.history`; the operator tree is not a table | SQL UI tree with per-operator rows, time and spill |
+| Oracle | Automatic for statements over 5s of CPU or I/O, and for parallel ones | `V$SQL_PLAN_MONITOR`, one row per plan line, live and after the fact; reports are persisted to `DBA_HIST_REPORTS` under AWR retention, 8 days by default | Yes | `DBMS_SQL_MONITOR.REPORT_SQL_MONITOR` renders text, HTML, XML or an *active report* — a self-contained HTML file that can be attached to a ticket |
+| SQL Server | Query Store, opt-in per database | Showplan XML blob in `sys.query_store_plan`, with runtime statistics aggregated per interval in `sys.query_store_runtime_stats` | Yes, but the plan itself is an opaque blob | SSMS; aimed at plan-change regressions rather than at one execution |
+| Trino, Starburst | Always on | Query and stage details in Insights; `EXPLAIN (FORMAT JSON)` for the plan | Partly | Web UI stage graph; plan and stage details are dropped after 7 days |
+| PostgreSQL on RDS, Aurora, Cloud SQL | `auto_explain`, opt-in | Plans written to the server log, not to a table | No — third-party tools such as pganalyze and pgDash scrape the logs | [pev2](https://github.com/dalibo/pev2), from pasted text or JSON |
+
+### What follows from this {#prior-art-consequences}
+
+**The architecture in [§1](#goal) is the one that shipped elsewhere.** Redshift's console profiler renders
+`SYS_QUERY_DETAIL` and `SYS_QUERY_EXPLAIN` and nothing else: the system views are the contract and the UI is one of
+their clients. That is exactly the split this document proposes, which is some evidence that it holds up.
+
+**Snowflake's layout is the hybrid considered in [§5](#open-storage-layout).** Fixed columns carry identity, topology
+and timing; semi-structured columns carry the parts that differ per operator type. That gives columnar storage and
+ordinary cross-plan aggregation, and still lets a join step report its build side without a schema change. Note that
+`PARENT_OPERATORS` is an array, so the rows encode a DAG directly and nothing has to be reassembled from a separate
+document. This is an argument for Option 2 with `JSON` columns for the heterogeneous attributes, rather than for a
+single JSON blob per query.
+
+**No vendor exposes a pipeline-level view.** All of them show the plan or stage level and describe parallelism as
+attributes of a node — BigQuery reports both the average-worker and the slowest-worker timing per stage, which is one
+concrete answer to the question of how to summarise the distribution of active time across processors
+([§3](#plan-level-view)).
+
+**Retention is short and bounded everywhere**: 14 days in Snowflake, 8 in Oracle, 7 in Starburst. `system.query_plan_log`
+should have a default TTL rather than growing without limit.
+
+**A self-contained single file is a recurring export format** — Oracle's active report, Databricks' downloadable and
+re-importable JSON, and pev2's single HTML page. It serves the "paste it into a ticket" case far better than ASCII does,
+and it is what makes a plan shareable with someone who has no access to the server. Worth treating as a deliverable of
+[Milestone 3](#milestone-3) rather than as an aside.
+
+**The controls in [§2](#controls) follow the PostgreSQL lineage, not the warehouse one.** A duration threshold, a
+sampling probability and a verbosity level are `auto_explain`. The warehouses capture unconditionally because their
+per-operator metrics are collected anyway as part of normal execution; here capture costs something that is not already
+being paid, which is why the switch exists at all.
+
+## 5. Open design choices {#open-design-choices}
 
 Everything listed here is deliberately unresolved and is to be settled.
 
