@@ -22,8 +22,8 @@ controllable.
 
 * `log_query_plans` — whether the plan is captured at all. DEFAULT: false
 * `log_query_plans_profile_level` — the profiling level of the plan. 0 being the cheapest profiling information. DEFAULT: 0
-* `log_query_plans_probability` — the fraction of queries whose plan is captured. DEFAULT: 0
-* `log_query_plans_min_query_duration_ms` — only captures the plan if it executes for longer than `duration` in ms. DEFAULT: +inf
+* `log_query_plans_probability` — the fraction of queries whose plan is captured. DEFAULT: 1
+* `log_query_plans_min_query_duration_ms` — only captures the plan if it executes for longer than `duration` in ms. DEFAULT: 0
 
 ## 3. Prior art {#prior-art}
 
@@ -48,12 +48,12 @@ kept.
 
 A query is executed normally, its plan is captured, and a human can read it back from a system table.
 
-#### Scope
+#### Scope {#milestone-1-scope}
 
 * A new system table is introduced `system.query_plan_log`.
 * The following control flags will be implemented: `log_query_plans` and `log_query_plans_probability`.
 
-The following schema will be used for `system.query_plan_log`:
+The following schema will be used for `system.query_plan_log`, where each row will contain all information related to a single query execution:
 
 ```sql
 
@@ -66,8 +66,7 @@ CREATE TABLE query_plan_log (
 
   query_id String,
   initial_query_id String,
-  normalized_query_hash UInt64,
-  normalized_plan_hash UInt64,
+  query_string String,
   query_duration_ms UInt64,
   revision UInt32, -- ClickHouse version
   plan_format_version UInt16, -- plan version
@@ -86,19 +85,24 @@ CREATE TABLE query_plan_log (
 
   -- Profiling of each step in the query plan
   steps Nested (
-    id UInt64,
+    id UInt64, -- should be the same as we see in system.processors_profile_log.plan_step for this query
     name LowCardinality(String),
     extra_info String, -- e.g. expressions
     parents Array(UInt64),
 
-    statistics Tuple(
+    statistics Nested(
+      group LowCardinality(String),
       input_rows UInt64,
       output_rows UInt64,
       estimated_output_rows UInt64,
       input_bytes UInt64,
       output_bytes UInt64,
-      elapsed_time_us UInt64,
-      extra Map(LowCardinality(String), String),
+      num_processors UInt64,
+      wall_clock_us UInt64, -- wall clock time to execute the step
+      sum_elapsed_time_us UInt64, -- sum of all processors elapsed time
+      min_elapsed_time_us UInt64, -- min elapsed time of all processors
+      max_elapsed_time_us UInt64, -- max elapsed time of all processors
+      extra Map(LowCardinality(String), String), -- step specific statistics
     )
   ),
 
@@ -111,31 +115,54 @@ CREATE TABLE query_plan_log (
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(event_date)
 ORDER BY (event_date, event_time)
-TTL event_time + INTERVAL 7 DAY DELETE
 ```
 
-#### Goals
+#### Outcomes {#milestone-1-outcomes}
 
-* To allow more experienced users, and developers, to understand what happened with the query during execution.
-* To allow simplified control over profiling (`log_query_plans` and `log_query_plans_probability`).
-* To already bootstrap the system table with most of the columns.
+For a query that has already finished, a user can answer, without running it again:
 
-#### Non user facing goals
+* which plan was executed, and which step of it dominated the runtime;
+* how much each step filtered or expanded its input, in rows and in bytes, and how far that was from what the
+  optimizer estimated;
+* what the plan looked like for a query that failed, up to the point where it failed;
 
-* Profiling should incur none, or almost none, overhead over the query.
+#### Constraints {#milestone-1-constraints}
+
+* With `log_query_plans = 0`, or when a query is not selected by `log_query_plans_probability`, capture adds no
+  measurable overhead: the decision is taken before any per-step accounting starts;
+* Capture never changes the plan that is executed, the result of the query, or whether it succeeds;
 
 ### Milestone 2 — Improved Metrics {#milestone-2}
 
-Better control of logging, and more metrics.
+New metrics will be added, better logging control, executed plan comparison.
 
 Scope:
 
-* New metrics will be introduced as needed.
+* Add new metrics:
+  * amount of bytes spilled to disk
+  * hash table sizes
+  * index pruning
+  * filter selectivity
+  * time waiting (`input_wait_elapsed_us` / `output_wait_elapsed_us`)
 * The following control flags will be implemented `log_query_plans_profile_level` and `log_query_plans_min_query_duration_ms`.
-* Possible refactoring of `EXPLAIN ANALYZE`: split formatting and query plan statistics.
+* Introduce normalized query plan (`normalized_plan_hash`) column into `system.query_plan_log`.
+
+#### Outcomes
+
+A user can:
+
+* compare identical queries across executions, over time, across hosts, or across ClickHouse versions, using `normalized_plan_hash`.
+* find out which steps spilled to disk and how many bytes.
+* find out if created indexes are correctly being used to filter data.
+
+#### Constraints
+
+* Metrics which add overhead are only calculated if `log_query_plans_profile_level` is set to allow it.
+* `log_query_plans_min_query_duration_ms` records only the metrics which have no overhead. Since duration is only known once the query has finished, the threshold can filter what is stored, never what is collected — anything gated behind it must have been cheap enough to collect for every query.
 
 ### Milestone 3 — Stabilization {#milestone-3}
 
 Scope:
 
 * Stabilize the schema of `system.query_plan_log`.
+* Export methods.
