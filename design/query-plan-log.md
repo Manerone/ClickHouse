@@ -15,17 +15,26 @@ server version have changed in the meantime.
 The end goal is that every execution worth keeping leaves behind the plan it actually ran, annotated with what
 happened at each operator, in a system table.
 
-## 2. Controls {#controls}
+## 2. Non-goals {#non-goals}
 
-Capturing a plan is not free, and a plan is much larger than a `system.query_log` row, so capture has to be
+This will **not**:
+
+* add live monitoring for query execution;
+* replace any previous system tables;
+* alert about plan regression;
+* provide any external UI to visualize the plans;
+
+## 3. Controls {#controls}
+
+Capturing a plan is not free, it incurs extra overhead both on processing and storage, so it has to be
 controllable.
 
-* `log_query_plans` — whether the plan is captured at all. DEFAULT: false
+* `log_query_plans` — whether the plan is captured at all. DEFAULT: 0
 * `log_query_plans_profile_level` — the profiling level of the plan. 0 being the cheapest profiling information. DEFAULT: 0
 * `log_query_plans_probability` — the fraction of queries whose plan is captured. DEFAULT: 1
 * `log_query_plans_min_query_duration_ms` — only captures the plan if it executes for longer than `duration` in ms. DEFAULT: 0
 
-## 3. Prior art {#prior-art}
+## 4. Prior art {#prior-art}
 
 Every major vendor gives users a way to see how a query was executed after it finished, and none of them asks the user
 to run the query a second time to get it. The differences are in what is stored, who renders it, and how long it is
@@ -42,7 +51,43 @@ kept.
 | Trino, Starburst | Always on | Query and stage details in [Insights](https://docs.starburst.io/latest/insights/query-details.html); [`EXPLAIN (FORMAT JSON)`](https://trino.io/docs/current/sql/explain.html) for the plan | Partly | Web UI stage graph; plan and stage details are dropped after 7 days |
 | PostgreSQL on RDS, Aurora, Cloud SQL | [`auto_explain`](https://www.postgresql.org/docs/current/auto-explain.html), opt-in | Plans written to the server log, not to a table | No — third-party tools such as pganalyze and pgDash scrape the logs | [pev2](https://github.com/dalibo/pev2), from pasted text or JSON |
 
-## 4. Milestones {#milestones}
+## 5. Decisions {#decisions}
+
+### One row per query execution {#decision-one-row-per-execution}
+
+Snowflake and Redshift store one row per operator; BigQuery and Databricks store one document per job. This proposal
+follows the second group: a single row holds the whole plan.
+
+Storing it in one row means it is written atomically, versioned as a unit by `plan_format_version`, and
+renderable by a function that takes a single argument. It also means that reading one plan touches exactly one row,
+which is the dominant access pattern — a user arrives with a `query_id`.
+
+Operator-level analytics across queries — "which step type spills most often across the fleet" — becomes an array
+operation.
+
+### The tree lives in one column, metadata stays flat {#decision-plan-column}
+
+Everything that identifies or filters an execution — `query_id`, `event_time`, `query_duration_ms`, `status` — is a
+top-level column. Everything that describes the plan itself lives inside the `plan` tuple.
+
+### Statistics are aggregated per step, not per processor {#decision-per-step}
+
+`system.processors_profile_log` is the per-processor ground truth and has no notion of the plan tree.
+`system.query_plan_log` is the per-step aggregate that carries the structure.
+
+### Renderings are derived, not stored {#decision-render-on-read}
+
+The stored form is structured; ASCII, JSON and DOT are produced from it on read by scalar functions.
+
+`ascii_plan` in Milestone 1 is an exception, so that the table is readable by a human before any renderer
+exists. It is removed in Milestone 3 once the renderers land.
+
+### Capture is off by default {#decision-off-by-default}
+
+Every vendor in the table above captures unconditionally. Initially capturing is turned off by default,
+but we provide methods to define how capture can happen, but this has to be define by the user.
+
+## 6. Milestones {#milestones}
 
 ### Milestone 1 — MVP {#milestone-1-mvp}
 
@@ -65,15 +110,14 @@ CREATE TABLE query_plan_log (
   event_time_microseconds DateTime64(6),
 
   query_id String,
-  initial_query_id String,
   query_string String,
   query_duration_ms UInt64,
   revision UInt32, -- ClickHouse version
   plan_format_version UInt16, -- plan version
 
-  ascii_plan String, -- Plan in plain ASCII, unstable until M3
+  ascii_plan String, -- Plan in plain ASCII, to be removed at M3
 
-  status Enum ('Finished', 'Failed', 'Canceled'),
+  status Enum ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing'),
 
   plan Tuple(
     -- Profiling info for what happens before execution
@@ -86,7 +130,7 @@ CREATE TABLE query_plan_log (
 
     -- Profiling of each step in the query plan
     steps Nested (
-      id UInt64, -- should be the same as we see in system.processors_profile_log.plan_step for this query
+      id UInt64, -- same as `system.processors_profile_log.plan_step` for this query
       name LowCardinality(String),
       extra_info Map(LowCardinality(String), String), -- e.g. expressions
       children Array(UInt64),
@@ -103,16 +147,15 @@ CREATE TABLE query_plan_log (
         sum_elapsed_time_us UInt64, -- sum of all processors elapsed time
         min_elapsed_time_us UInt64, -- min elapsed time of all processors
         max_elapsed_time_us UInt64, -- max elapsed time of all processors
-        extra Map(LowCardinality(String), String), -- step specific statistics
+        extra Map(LowCardinality(String), String) -- step specific statistics
       )
-    ),
+    )
   ),
 
   -- Added automatically by `SystemLog` for every log table that declares these columns
   INDEX event_time_index event_time TYPE minmax GRANULARITY 1,
   INDEX event_time_microseconds_index event_time_microseconds TYPE minmax GRANULARITY 1,
-  INDEX query_id_index query_id TYPE bloom_filter(0.001) GRANULARITY 1,
-  INDEX initial_query_id_index initial_query_id TYPE bloom_filter(0.001) GRANULARITY 1
+  INDEX query_id_index query_id TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(event_date)
@@ -125,20 +168,21 @@ For a query that has already finished, a user can answer, without running it aga
 
 * which plan was executed, and which step of it dominated the runtime;
 * how much each step filtered or expanded its input, in rows and in bytes, and how far that was from what the optimizer estimated;
-* how many processors executed the step, if there is any skew on execution time.
-* what the plan looked like for a query that failed, up to the point where it failed;
+* how many processors executed the step, if there is any skew on execution time;
+* what the plan looked like for a query that failed, up to the point where it failed; If the query failed before any plan was created
+  then nothing will be added to the `query_plan_log` table.
 
 #### Constraints {#milestone-1-constraints}
 
 * With `log_query_plans = 0`, or when a query is not selected by `log_query_plans_probability`, capture adds no
   measurable overhead: the decision is taken before any per-step accounting starts;
+* At this point, when a query is selected to be profiled, there should be almost no overhead added to query performance.
+  When `log_query_plans_profile_level` is introduced, higher profile levels will, most likely, add overhead.
 * Capture never changes the plan that is executed, the result of the query, or whether it succeeds;
 
 ### Milestone 2 — Improved Control, New Metrics and Plan Comparison {#milestone-2}
 
-Better profiling control, new metrics will be added, plan comparison.
-
-Scope:
+#### Scope {#milestone-2-scope}
 
 * The following control flags will be implemented `log_query_plans_profile_level` and `log_query_plans_min_query_duration_ms`.
 * Add new metrics:
@@ -151,7 +195,7 @@ Scope:
 * Introduce normalized query hash (`normalized_query_hash`) column into `system.query_plan_log`. This will hash the query string of the query plan.
     The idea is that `SELECT * FROM t1 WHERE id = 1` and `SELECT * FROM t1 WHERE id = 2` hash to the same value.
 
-#### Outcomes
+#### Outcomes {#milestone-2-outcomes}
 
 A user can:
 
@@ -160,24 +204,36 @@ A user can:
 * find out which steps spilled to disk and how many bytes.
 * find out if created indexes are correctly being used to filter data.
 * compare identical queries across executions, over time, across hosts, or across ClickHouse versions, using `normalized_plan_hash`.
-* compare identical query classes across executions , over time, across hosts, or across ClickHouse versions, using `normalized_query_hash`.
+* compare identical query classes across executions, over time, across hosts, or across ClickHouse versions, using `normalized_query_hash`.
 
-#### Constraints
+#### Constraints {#milestone-2-constraints}
 
 * Metrics which add overhead are only calculated if `log_query_plans_profile_level` is set to allow it.
 * `log_query_plans_min_query_duration_ms` records only the metrics which have no overhead. Since duration is only known once the query has finished, the threshold can filter what is stored, never what is collected — anything gated behind it must have been cheap enough to collect for every query.
 
 ### Milestone 3 — Export methods {#milestone-3}
 
-Scope:
+#### Scope {#milestone-3-scope}
 
-* Remove the ascii_plan column.
-* Define export methods as scalar functions, for example, `exportAsPlainAscii`, `exportAsJson`, `exportAsDot`, etc.
-* Stabilize the schema of `system.query_plan_log`.
+* Remove the `ascii_plan` column.
+* Define export methods as scalar functions, for example, `formatAsPlainAscii`, `formatAsJson`, `formatAsDot`, etc.
+* Define access control.
 
-## 5. Open Questions
+#### Outcomes {#milestone-3-outcomes}
+
+A user can:
+
+* visualize the query plan in different formats, even export it to an external tool;
+* access the `query_plan_log` if it has access rights;
+
+#### Constraints {#milestone-3-constraints}
+
+* TBD
+
+## 7. Open questions {#open-questions}
 
 - What granularity we should use? Maybe instead of aggregating on the steps, we should keep information about the processors and let the formatters figure out how to print.
   - Problem here is that this conflicts with `system.processors_profile_log`
 - How to handle distributed queries?
 - Maybe define TTL for the new system table, or let the user define somehow?
+- SELECT only queries for now?
