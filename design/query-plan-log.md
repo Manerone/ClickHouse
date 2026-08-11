@@ -73,37 +73,39 @@ CREATE TABLE query_plan_log (
 
   ascii_plan String, -- Plan in plain ASCII, unstable until M3
 
-  status Enum ('QueryFinished', 'ExceptionBeforeStart', 'ExceptionWhileProcessing'),
+  status Enum ('Finished', 'Failed', 'Canceled'),
 
-  -- Profiling info for what happens before execution
-  pre_execution_profile Tuple (
-    parser_us UInt64,
-    analyzer_us UInt64,
-    planner_us UInt64,
-    optimizer_us UInt64
-  ),
+  plan Tuple(
+    -- Profiling info for what happens before execution
+    pre_execution_profile Tuple (
+      parser_us UInt64,
+      analyzer_us UInt64,
+      planner_us UInt64,
+      optimizer_us UInt64
+    ),
 
-  -- Profiling of each step in the query plan
-  steps Nested (
-    id UInt64, -- should be the same as we see in system.processors_profile_log.plan_step for this query
-    name LowCardinality(String),
-    extra_info String, -- e.g. expressions
-    parents Array(UInt64),
+    -- Profiling of each step in the query plan
+    steps Nested (
+      id UInt64, -- should be the same as we see in system.processors_profile_log.plan_step for this query
+      name LowCardinality(String),
+      extra_info Map(LowCardinality(String), String), -- e.g. expressions
+      children Array(UInt64),
 
-    statistics Nested(
-      group LowCardinality(String),
-      input_rows UInt64,
-      output_rows UInt64,
-      estimated_output_rows UInt64,
-      input_bytes UInt64,
-      output_bytes UInt64,
-      num_processors UInt64,
-      wall_clock_us UInt64, -- wall clock time to execute the step
-      sum_elapsed_time_us UInt64, -- sum of all processors elapsed time
-      min_elapsed_time_us UInt64, -- min elapsed time of all processors
-      max_elapsed_time_us UInt64, -- max elapsed time of all processors
-      extra Map(LowCardinality(String), String), -- step specific statistics
-    )
+      statistics Nested(
+        group LowCardinality(String), -- indicates which part of the step is being executed (e.g. hash table build)
+        input_rows UInt64,
+        output_rows UInt64,
+        estimated_output_rows UInt64,
+        input_bytes UInt64,
+        output_bytes UInt64,
+        num_processors UInt64,
+        wall_clock_us UInt64, -- wall clock time to execute the step
+        sum_elapsed_time_us UInt64, -- sum of all processors elapsed time
+        min_elapsed_time_us UInt64, -- min elapsed time of all processors
+        max_elapsed_time_us UInt64, -- max elapsed time of all processors
+        extra Map(LowCardinality(String), String), -- step specific statistics
+      )
+    ),
   ),
 
   -- Added automatically by `SystemLog` for every log table that declares these columns
@@ -122,8 +124,8 @@ ORDER BY (event_date, event_time)
 For a query that has already finished, a user can answer, without running it again:
 
 * which plan was executed, and which step of it dominated the runtime;
-* how much each step filtered or expanded its input, in rows and in bytes, and how far that was from what the
-  optimizer estimated;
+* how much each step filtered or expanded its input, in rows and in bytes, and how far that was from what the optimizer estimated;
+* how many processors executed the step, if there is any skew on execution time.
 * what the plan looked like for a query that failed, up to the point where it failed;
 
 #### Constraints {#milestone-1-constraints}
@@ -132,37 +134,50 @@ For a query that has already finished, a user can answer, without running it aga
   measurable overhead: the decision is taken before any per-step accounting starts;
 * Capture never changes the plan that is executed, the result of the query, or whether it succeeds;
 
-### Milestone 2 — Improved Metrics {#milestone-2}
+### Milestone 2 — Improved Control, New Metrics and Plan Comparison {#milestone-2}
 
-New metrics will be added, better logging control, executed plan comparison.
+Better profiling control, new metrics will be added, plan comparison.
 
 Scope:
 
+* The following control flags will be implemented `log_query_plans_profile_level` and `log_query_plans_min_query_duration_ms`.
 * Add new metrics:
   * amount of bytes spilled to disk
   * hash table sizes
   * index pruning
   * filter selectivity
   * time waiting (`input_wait_elapsed_us` / `output_wait_elapsed_us`)
-* The following control flags will be implemented `log_query_plans_profile_level` and `log_query_plans_min_query_duration_ms`.
-* Introduce normalized query plan (`normalized_plan_hash`) column into `system.query_plan_log`.
+* Introduce normalized query plan hash (`normalized_plan_hash`) column into `system.query_plan_log`. This will hash the "shape" of the query plan.
+* Introduce normalized query hash (`normalized_query_hash`) column into `system.query_plan_log`. This will hash the query string of the query plan.
+    The idea is that `SELECT * FROM t1 WHERE id = 1` and `SELECT * FROM t1 WHERE id = 2` hash to the same value.
 
 #### Outcomes
 
 A user can:
 
-* compare identical queries across executions, over time, across hosts, or across ClickHouse versions, using `normalized_plan_hash`.
+* control the level of profiling.
+* measure only slow queries.
 * find out which steps spilled to disk and how many bytes.
 * find out if created indexes are correctly being used to filter data.
+* compare identical queries across executions, over time, across hosts, or across ClickHouse versions, using `normalized_plan_hash`.
+* compare identical query classes across executions , over time, across hosts, or across ClickHouse versions, using `normalized_query_hash`.
 
 #### Constraints
 
 * Metrics which add overhead are only calculated if `log_query_plans_profile_level` is set to allow it.
 * `log_query_plans_min_query_duration_ms` records only the metrics which have no overhead. Since duration is only known once the query has finished, the threshold can filter what is stored, never what is collected — anything gated behind it must have been cheap enough to collect for every query.
 
-### Milestone 3 — Stabilization {#milestone-3}
+### Milestone 3 — Export methods {#milestone-3}
 
 Scope:
 
+* Remove the ascii_plan column.
+* Define export methods as scalar functions, for example, `exportAsPlainAscii`, `exportAsJson`, `exportAsDot`, etc.
 * Stabilize the schema of `system.query_plan_log`.
-* Export methods.
+
+## 5. Open Questions
+
+- What granularity we should use? Maybe instead of aggregating on the steps, we should keep information about the processors and let the formatters figure out how to print.
+  - Problem here is that this conflicts with `system.processors_profile_log`
+- How to handle distributed queries?
+- Maybe define TTL for the new system table, or let the user define somehow?
