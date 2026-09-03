@@ -21,16 +21,16 @@ namespace DB
 
 class AnalyzeStepsStats
 {
-    using StepAndGroup = std::pair<const IQueryPlanStep *, size_t>;
+    using StepAndGroup = std::pair<String, size_t>;
 
     /// Per-processor elapsed times collected per (step, group) to compute the distribution.
     /// A multiset keeps the values sorted and preserves duplicates so the median stays correct.
     using ElapsedTimes = std::multiset<UInt64>;
     using ElapsedTimesPerStepGroup = std::unordered_map<StepAndGroup, ElapsedTimes, boost::hash<StepAndGroup>>;
 
-    using StatsByStep = std::unordered_map<const IQueryPlanStep *, StepIOStats>;
+    using StatsByStep = std::unordered_map<String, StepIOStats>;
     using StatsByStepAndGroup = std::unordered_map<StepAndGroup, StepGroupStats, boost::hash<StepAndGroup>>;
-    using ProcessorsByStep = std::unordered_map<const IQueryPlanStep *, std::vector<IProcessor *>>;
+    using ProcessorsByStep = std::unordered_map<String, std::vector<IProcessor *>>;
 
 public:
     AnalyzeStepsStats(const QueryPipeline & pipeline, UInt64 execution_query_time_ns_);

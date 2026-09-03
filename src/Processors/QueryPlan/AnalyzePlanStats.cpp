@@ -172,19 +172,19 @@ void AnalyzeStepsStats::collectIOStats(const Processors & processors)
 {
     auto crosses_step_boundary = [](const IProcessor & owner, const IProcessor & neighbour)
     {
-        return owner.getQueryPlanStep() != neighbour.getQueryPlanStep();
+        return owner.getStepUniqID() != neighbour.getStepUniqID();
     };
 
     for (const auto & proc : processors)
     {
-        const auto * step = proc->getQueryPlanStep();
+        const auto & step_id = proc->getStepUniqID();
 
-        if (!step)
+        if (step_id.empty())
             continue;
 
-        auto & step_stats = stats_by_step[step];
+        auto & step_stats = stats_by_step[step_id];
 
-        processors_by_step[step].push_back(proc.get());
+        processors_by_step[step_id].push_back(proc.get());
 
         for (const auto & input_port : proc->getInputs())
         {
@@ -220,9 +220,9 @@ AnalyzeStepsStats::ElapsedTimesPerStepGroup AnalyzeStepsStats::collectTimingStat
 
     for (const auto & proc : processors)
     {
-        const auto * step = proc->getQueryPlanStep();
+        const auto & step_id = proc->getStepUniqID();
 
-        if (!step)
+        if (step_id.empty())
             continue;
 
         const size_t group = proc->getQueryPlanStepGroup();
@@ -230,7 +230,7 @@ AnalyzeStepsStats::ElapsedTimesPerStepGroup AnalyzeStepsStats::collectTimingStat
         if (group_elapsed == 0)
             continue;
 
-        const auto step_group_key = std::make_pair(step, group);
+        const auto step_group_key = std::make_pair(step_id, group);
         auto & group_stats = stats_by_step_group[step_group_key];
         group_stats.sum_elapsed_ns += group_elapsed;
         ++group_stats.total_num_processors;
@@ -239,7 +239,7 @@ AnalyzeStepsStats::ElapsedTimesPerStepGroup AnalyzeStepsStats::collectTimingStat
         if (group_stats.wall_clock_time_ns == 0)
         {
             if (const auto * registry = pipeline.getStepClocks())
-                if (const auto * clock = registry->find(step, group))
+                if (const auto * clock = registry->find(step_id, group))
                     group_stats.wall_clock_time_ns = clock->getStepWallTime();
         }
     }
@@ -275,11 +275,13 @@ StepStatsContext AnalyzeStepsStats::makeContext(const IQueryPlanStep * step) con
     context.execution_query_time_ns = execution_query_time_ns;
     context.max_num_threads_per_query = max_num_threads_per_query;
 
-    if (const auto step_stats_it = stats_by_step.find(step); step_stats_it != stats_by_step.end())
+    const auto step_id = step->getUniqID();
+
+    if (const auto step_stats_it = stats_by_step.find(step_id); step_stats_it != stats_by_step.end())
         context.io = step_stats_it->second;
 
     for (size_t group : step->getStepGroups())
-        if (const auto group_stats_it = stats_by_step_group.find(std::make_pair(step, group)); group_stats_it != stats_by_step_group.end())
+        if (const auto group_stats_it = stats_by_step_group.find(std::make_pair(step_id, group)); group_stats_it != stats_by_step_group.end())
             context.group_stats[group] = group_stats_it->second;
 
     return context;
@@ -288,7 +290,7 @@ StepStatsContext AnalyzeStepsStats::makeContext(const IQueryPlanStep * step) con
 AnalyzedStepData AnalyzeStepsStats::analyzeStep(const IQueryPlanStep * step) const
 {
     StepProcessors step_processors;
-    if (const auto processors_it = processors_by_step.find(step); processors_it != processors_by_step.end())
+    if (const auto processors_it = processors_by_step.find(step->getUniqID()); processors_it != processors_by_step.end())
         step_processors = processors_it->second;
 
     StepAnalysisReport raw_report = step->getAnalysisReport(step_processors);

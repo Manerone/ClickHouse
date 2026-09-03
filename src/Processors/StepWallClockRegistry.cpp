@@ -30,7 +30,7 @@ void StepWallClockRegistry::populateFromPlan(const QueryPlan & plan)
 
         for (size_t group : cur->step->getStepGroups())
         {
-            auto key = std::make_pair(cur->step.get(), group);
+            auto key = std::make_pair(cur->step->getUniqID(), group);
             clocks.try_emplace(key, std::make_unique<StepWallClock>(query_start_ns));
         }
 
@@ -41,9 +41,9 @@ void StepWallClockRegistry::populateFromPlan(const QueryPlan & plan)
     }
 }
 
-StepWallClock * StepWallClockRegistry::find(const IQueryPlanStep * step_ptr, size_t group) const
+StepWallClock * StepWallClockRegistry::find(const String & step_uniq_id, size_t group) const
 {
-    auto it = clocks.find({step_ptr, group});
+    auto it = clocks.find({step_uniq_id, group});
     return it != clocks.end() ? it->second.get() : nullptr;
 }
 }

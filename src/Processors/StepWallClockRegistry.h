@@ -16,13 +16,13 @@ public:
 
     void populateFromPlan(const QueryPlan & plan);
 
-    StepWallClock * find(const IQueryPlanStep *, size_t group) const;
+    StepWallClock * find(const String & step_uniq_id, size_t group) const;
 
     UInt64 getQueryStartNs() const { return query_start_ns; }
 private:
 
-    using StepAndGroup = std::pair<const IQueryPlanStep *, size_t>;
-    using Hash = boost::hash<std::pair<const IQueryPlanStep *, size_t>>;
+    using StepAndGroup = std::pair<String, size_t>;
+    using Hash = boost::hash<StepAndGroup>;
     using StepWallClockPtr = std::unique_ptr<StepWallClock>;
     using MapStepToWallClock = std::unordered_map<StepAndGroup, StepWallClockPtr, Hash>;
 
