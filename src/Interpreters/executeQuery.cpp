@@ -78,6 +78,7 @@
 #include <Interpreters/QueryConstructionSettings.h>
 #include <Interpreters/ProcessList.h>
 #include <Interpreters/ProcessorsProfileLog.h>
+#include <Interpreters/QueryPlanProfiler.h>
 #include <Interpreters/QueryLog.h>
 #include <IO/AsyncReadCounters.h>
 #include <Interpreters/QueryMetricLog.h>
@@ -696,7 +697,7 @@ static ResultProgress flushQueryProgress(const QueryPipeline & pipeline, bool pu
     return res;
 }
 
-static QueryPipelineFinalizedInfo finalizeQueryPipelineBeforeLogging(QueryPipeline && query_pipeline, QueryResultCacheUsage /*query_result_cache_usage*/, bool pulling_pipeline)
+static QueryPipelineFinalizedInfo finalizeQueryPipelineBeforeLogging(QueryPipeline && query_pipeline, QueryResultCacheUsage /*query_result_cache_usage*/, bool pulling_pipeline, const ContextPtr & context)
 {
     /// Trigger the actual write of the buffered query result into the query result cache. This is done explicitly to
     /// prevent partial/garbage results in case of exceptions during query execution.
@@ -720,6 +721,9 @@ static QueryPipelineFinalizedInfo finalizeQueryPipelineBeforeLogging(QueryPipeli
         query_pipeline.tryGetResultRowsAndBytes(result_rows, result_bytes);
         result_progress = std::make_optional<ResultProgress>(result_rows, result_bytes, 0);
     }
+
+    if (auto plan_profiler = context->getPlanProfiler(); plan_profiler && plan_profiler->hasQueryPlan())
+        plan_profiler->render(&query_pipeline);
 
     /// Reset pipeline before fetching profile counters
     query_pipeline.reset();
@@ -859,7 +863,7 @@ void logQueryFinish(
     bool log_as_internal)
 {
     const auto time_now = std::chrono::system_clock::now();
-    auto query_pipeline_finalized_info = finalizeQueryPipelineBeforeLogging(std::move(query_pipeline), query_result_cache_usage, pulling_pipeline);
+    auto query_pipeline_finalized_info = finalizeQueryPipelineBeforeLogging(std::move(query_pipeline), query_result_cache_usage, pulling_pipeline, context);
     logQueryFinishImpl(elem, context, query_ast, query_pipeline_finalized_info, pulling_pipeline, query_span, query_result_cache_usage, internal, log_as_internal, time_now);
 }
 
@@ -3121,6 +3125,12 @@ static BlockIO executeQueryImpl(
                         span = std::make_unique<OpenTelemetry::SpanHolder>(class_name + "::execute()");
                     }
 
+                    if (interpreter->supportsPlanProfiling() && QueryPlanProfiler::canEnableProfiler(context, internal))
+                    {
+                        context->enablePlanProfiler();
+                        interpreter->setPlanProfiler(context->getPlanProfiler());
+                    }
+
                     res = interpreter->execute();
                     /// If it is a non-internal SELECT query, and active (write) use of the query cache is enabled, then add a processor on
                     /// top of the pipeline which stores the result in the query cache.
@@ -3245,11 +3255,12 @@ static BlockIO executeQueryImpl(
 
             /// The prepare callback flushes pipeline progress and resets the pipeline
             auto finish_callback_finalize_pipeline = [
-                                     query_result_cache_usage,
-                                     // Need to be cached, since will be changed after complete()
-                                     pulling_pipeline = pipeline.pulling()](QueryPipeline && query_pipeline) mutable -> QueryPipelineFinalizedInfo
+                query_result_cache_usage,
+                context,
+                // Need to be cached, since will be changed after complete()
+                pulling_pipeline = pipeline.pulling()](QueryPipeline && query_pipeline) mutable -> QueryPipelineFinalizedInfo
             {
-                return finalizeQueryPipelineBeforeLogging(std::move(query_pipeline), query_result_cache_usage, pulling_pipeline);
+                return finalizeQueryPipelineBeforeLogging(std::move(query_pipeline), query_result_cache_usage, pulling_pipeline, context);
             };
 
             /// The finish callback logs the query result

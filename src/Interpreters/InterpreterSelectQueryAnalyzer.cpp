@@ -5,6 +5,7 @@
 #include <Interpreters/InterpreterFactory.h>
 #include <Interpreters/InterpreterSelectQueryAnalyzer.h>
 
+#include <Interpreters/QueryPlanProfiler.h>
 #include <Parsers/ASTSelectWithUnionQuery.h>
 #include <Parsers/ASTSelectQuery.h>
 #include <Parsers/ASTExpressionList.h>
@@ -62,6 +63,7 @@ extern const SettingsParallelReplicasMode parallel_replicas_mode;
 extern const SettingsBool use_concurrency_control;
 extern const SettingsBool parallel_replicas_local_plan;
 extern const SettingsString cluster_for_parallel_replicas;
+extern const SettingsUInt64 query_plan_max_step_description_length;
 }
 
 namespace
@@ -393,6 +395,9 @@ BlockIO InterpreterSelectQueryAnalyzer::execute()
         result.pipeline.setQuota(context->getQuota());
     result.pipeline.setNormalizedQueryHash(context->getNormalizedQueryHash());
 
+    if (plan_profiler)
+        plan_profiler->instrumentPipeline(result.pipeline);
+
     return result;
 }
 
@@ -420,13 +425,37 @@ QueryPipelineBuilder InterpreterSelectQueryAnalyzer::buildQueryPipeline()
 
     query_plan.setConcurrencyControl(context->getSettingsRef()[Setting::use_concurrency_control]);
 
+    /// Step descriptions produced by optimizations (e.g. merged expressions) are passed through
+    /// IQueryPlanStep::setStepDescription(description, limit), which truncates to `limit` — and the
+    /// default 0 discards them entirely. The strings are formatted regardless, so raising the limit
+    /// only stops the result being thrown away.
+    if (plan_profiler)
+    {
+        const size_t limit = context->getSettingsRef()[Setting::query_plan_max_step_description_length];
+        optimization_settings.max_step_description_length = limit;
+        plan_profiler->setMaxDescriptionLength(limit);
+    }
+
     /// Optimize the plan up front so its cost is attributed to QueryPlanOptimizeMicroseconds.
     /// Otherwise buildQueryPipeline would optimize internally and QueryPipelineBuildMicroseconds
     /// would double-count the optimization phase.
     query_plan.optimize(optimization_settings);
 
+    /// This is necessary because:
+    ///  - buildQueryPipeline moves each step's ActionsDAG into its ExpressionActions, and
+    ///    buildPrettyNamesPerPlan reads those DAGs, so the names must be built first;
+    ///  - PrettyNamesPerPlan is keyed by `const QueryPlan *` and explainPlan looks it up as
+    ///    `find(this)`, so it must be built on the very object that will later be rendered.
+    /// Hence: move the plan into the profiler, build the names there, then build the pipeline from it.
+    QueryPlan * plan_to_build = &query_plan;
+    if (plan_profiler)
+    {
+        plan_profiler->setQueryPlan(std::move(planner).extractQueryPlan());
+        plan_to_build = &plan_profiler->getQueryPlan();
+    }
+
     ProfileEventTimeIncrement<Microseconds> pipeline_build_time_watch(ProfileEvents::QueryPipelineBuildMicroseconds);
-    return std::move(*query_plan.buildQueryPipeline(optimization_settings, build_pipeline_settings, /*do_optimize=*/false));
+    return std::move(*plan_to_build->buildQueryPipeline(optimization_settings, build_pipeline_settings, /*do_optimize=*/false));
 }
 
 void InterpreterSelectQueryAnalyzer::addStorageLimits(const StorageLimitsList & storage_limits)

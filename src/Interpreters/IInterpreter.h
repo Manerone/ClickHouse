@@ -9,6 +9,8 @@ namespace DB
 {
 
 struct QueryLogElement;
+class QueryPlanProfiler;
+using QueryPlanProfilerPtr = std::shared_ptr<QueryPlanProfiler>;
 
 /** Interpreters interface for different queries.
   */
@@ -23,6 +25,10 @@ public:
 
     virtual bool ignoreQuota() const { return false; }
     virtual bool ignoreLimits() const { return false; }
+
+    virtual void setPlanProfiler(QueryPlanProfilerPtr) {}
+
+    virtual bool supportsPlanProfiling() const { return false; }
 
     // Fill query log element with query kind, query databases, query tables and query columns.
     void extendQueryLogElem(

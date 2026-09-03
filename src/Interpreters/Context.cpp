@@ -18,6 +18,7 @@
 #include <Common/Macros.h>
 #include <Common/EventNotifier.h>
 #include <Common/getNumberOfCPUCoresToUse.h>
+#include <Interpreters/QueryPlanProfiler.h>
 #include <base/getMemoryAmount.h>
 #include <Common/Stopwatch.h>
 #include <Common/formatReadable.h>
@@ -8958,6 +8959,18 @@ StorageSnapshotPtr Context::getPinnedStorageSnapshot(const UUID & table_uuid) co
 const ServerSettings & Context::getServerSettings() const
 {
     return shared->server_settings;
+}
+
+void Context::enablePlanProfiler()
+{
+    query_plan_profiler = std::make_shared<QueryPlanProfiler>();
+}
+
+QueryPlanProfilerPtr Context::getPlanProfiler() const
+{
+    if (!hasQueryContext())
+        return nullptr;
+    return getQueryContext()->query_plan_profiler;
 }
 
 ServerSettings Context::getServerSettingsCopy() const
