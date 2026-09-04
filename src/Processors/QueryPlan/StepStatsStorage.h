@@ -1,17 +1,13 @@
 #pragma once
 
-#include <utility>
 #include <set>
-#include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+#include <Processors/IProcessor.h>
 #include <Processors/QueryPlan/IQueryPlanStep.h>
 #include <Processors/QueryPlan/StepStatsModel.h>
 #include <QueryPipeline/QueryPipeline.h>
-#include <Processors/IProcessor.h>
-#include <IO/WriteBuffer.h>
-#include <IO/Operators.h>
-#include <Common/formatReadable.h>
 #include <base/types.h>
 #include <boost/container_hash/hash.hpp>
 
@@ -19,8 +15,11 @@
 namespace DB
 {
 
-class AnalyzeStepsStats
+/// Holds everything the pipeline reported about each plan step, and turns it into the per-step
+/// values a consumer can render.
+class StepStatsStorage
 {
+    /// Everything collected from the pipeline is keyed by the step's unique id
     using StepAndGroup = std::pair<String, size_t>;
 
     /// Per-processor elapsed times collected per (step, group) to compute the distribution.
@@ -33,9 +32,13 @@ class AnalyzeStepsStats
     using ProcessorsByStep = std::unordered_map<String, std::vector<IProcessor *>>;
 
 public:
-    AnalyzeStepsStats(const QueryPipeline & pipeline, UInt64 execution_query_time_ns_);
+    StepStatsStorage(const QueryPipeline & pipeline, UInt64 execution_query_time_ns_);
 
-    void printStepStats(const IQueryPlanStep * step, WriteBuffer & out, const std::string & detail_prefix, bool processors_info = false) const;
+    /// Unlike collecting, this needs a live step: getAnalysisReport reads state that only the step
+    /// object holds, and getStepGroups and the analyzer dispatch have no id-based equivalent. It
+    /// must therefore run while the pipeline is still alive, because the processors handed to
+    /// getAnalysisReport belong to it. What it returns is a plain value that outlives both.
+    AnalyzedStepData analyzeStep(const IQueryPlanStep * step) const;
 
 private:
     void collectIOStats(const Processors & processors);
@@ -43,8 +46,6 @@ private:
     void computeDistribution(const ElapsedTimesPerStepGroup & elapsed_per_step_group);
 
     StepStatsContext makeContext(const IQueryPlanStep * step) const;
-    AnalyzedStepData analyzeStep(const IQueryPlanStep * step) const;
-    void renderStep(const AnalyzedStepData & step_data, WriteBuffer & out, const std::string & prefix, bool processors_info) const;
 
     StatsByStep stats_by_step;
     StatsByStepAndGroup stats_by_step_group;
@@ -53,4 +54,5 @@ private:
     UInt64 max_num_threads_per_query = 0;
     UInt64 execution_query_time_ns = 0;
 };
+
 }

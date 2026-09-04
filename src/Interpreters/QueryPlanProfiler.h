@@ -24,7 +24,7 @@ public:
 
     /// Renders the plan and keeps the result, so that a later getRenderedPlan returns it.
     /// With a pipeline the plan carries per-step runtime statistics, and the call must happen
-    /// while the pipeline is alive: AnalyzeStepsStats reads the processors, and their reports are
+    /// while the pipeline is alive: StepStatsStorage reads the processors, and their reports are
     /// only reachable before the pipeline is reset. Pass nullptr to render without statistics.
     /// Everything the rendering allocates, the statistics included, happens under a memory-tracker
     /// blocker, and no exception escapes.

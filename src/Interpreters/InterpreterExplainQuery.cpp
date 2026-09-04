@@ -42,7 +42,7 @@
 #include <Processors/Sources/DelayedSource.h>
 #include <Processors/Sources/RemoteSource.h>
 #include <Processors/Executors/CompletedPipelineExecutor.h>
-#include <Processors/QueryPlan/AnalyzePlanStats.h>
+#include <Processors/QueryPlan/StepStatsStorage.h>
 #include <Processors/QueryPlan/QueryPlanFormat.h>
 #include <Processors/StepWallClockRegistry.h>
 #include <QueryPipeline/printPipeline.h>
@@ -1290,7 +1290,7 @@ QueryPipeline InterpreterExplainQuery::executeImpl()
             UInt64 read_bytes  = analyze_thread_group->performance_counters[ProfileEvents::SelectedBytes];
             Int64  peak_memory = analyze_thread_group->memory_tracker.getPeak();
 
-            AnalyzeStepsStats steps_to_stats(pipeline, execute_ns);
+            StepStatsStorage steps_to_stats(pipeline, execute_ns);
 
             formatHeaderExplainAnalyze(total_time_ns, planning_ns, execute_ns, read_rows, read_bytes, peak_memory, buf);
 

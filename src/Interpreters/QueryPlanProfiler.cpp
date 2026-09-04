@@ -6,7 +6,7 @@
 #include <Interpreters/Context.h>
 #include <Interpreters/QueryPlanProfiler.h>
 #include <IO/WriteBufferFromString.h>
-#include <Processors/QueryPlan/AnalyzePlanStats.h>
+#include <Processors/QueryPlan/StepStatsStorage.h>
 #include <Processors/QueryPlan/QueryPlanFormat.h>
 #include <Processors/StepWallClockRegistry.h>
 #include <QueryPipeline/QueryPipeline.h>
@@ -66,7 +66,7 @@ void QueryPlanProfiler::render(const QueryPipeline * pipeline)
 
     try
     {
-        std::optional<AnalyzeStepsStats> stats;
+        std::optional<StepStatsStorage> stats;
         if (pipeline)
         {
             UInt64 execution_time_ns = 0;
