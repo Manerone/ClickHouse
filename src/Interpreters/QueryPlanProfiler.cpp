@@ -6,6 +6,8 @@
 #include <Interpreters/Context.h>
 #include <Interpreters/QueryPlanProfiler.h>
 #include <IO/WriteBufferFromString.h>
+#include <Formats/FormatSettings.h>
+#include <Common/JSONBuilder.h>
 #include <Processors/QueryPlan/StepStatsStorage.h>
 #include <Processors/QueryPlan/QueryPlanFormat.h>
 #include <Processors/StepWallClockRegistry.h>
@@ -17,6 +19,29 @@ namespace DB
 namespace Setting
 {
 extern const SettingsBool log_query_plans;
+}
+
+namespace
+{
+
+String toJSONString(JSONBuilder::ItemPtr item)
+{
+    /// Deliberately the default format settings rather than the query's: what lands in the log must
+    /// not vary with how the user asked for their own results to be formatted. 64-bit integers are
+    /// written unquoted so that arithmetic over the stored statistics needs no cast.
+    FormatSettings format_settings;
+    format_settings.json.quote_64bit_integers = false;
+
+    String result;
+    WriteBufferFromString out(result);
+    JSONBuilder::FormatSettings json_format_settings{.settings = format_settings};
+    JSONBuilder::FormatContext format_context{.out = out};
+    item->format(json_format_settings, format_context);
+    out.finalize();
+
+    return result;
+}
+
 }
 
 void QueryPlanProfiler::setQueryPlan(QueryPlan plan_)
@@ -55,7 +80,7 @@ void QueryPlanProfiler::render(const QueryPipeline * pipeline)
 {
     if (!canRender())
     {
-        rendered_plan.emplace();
+        plan_json.emplace();
         return;
     }
 
@@ -75,24 +100,18 @@ void QueryPlanProfiler::render(const QueryPipeline * pipeline)
             stats.emplace(*pipeline, execution_time_ns);
         }
 
-        String result;
-        WriteBufferFromString out(result);
-        ExplainPlanOptions explain_options {
-            .actions = true,
+        /// `actions` stays off. This always renders after the pipeline was built, and building it
+        /// moves every ExpressionStep's ActionsDAG into its ExpressionActions, leaving the step
+        /// holding an empty one. Describing actions then does not merely print nothing: FilterStep
+        /// looks its filter column up with ActionsDAG::findInOutputs, which throws
+        /// UNKNOWN_IDENTIFIER once the outputs are gone. That applies to the no-statistics render
+        /// too, which a query failing during execution reaches with the pipeline already built.
+        ExplainPlanOptions explain_options
+        {
             .indexes = true,
-            .compact = true,
-            .pretty = true};
-        query_plan->explainPlan(
-            out,
-            explain_options,
-            /*offset=*/ 0,
-            max_description_length,
-            &pretty_names.value(),
-            /*parent_tree_prefix=*/ "",
-            /*is_last_child_plan=*/ true,
-            stats ? &*stats : nullptr);
-        out.finalize();
-        rendered_plan = std::move(result);
+        };
+
+        plan_json = toJSONString(query_plan->explainPlan(explain_options, stats ? &*stats : nullptr));
     }
     catch (...)
     {
@@ -100,11 +119,18 @@ void QueryPlanProfiler::render(const QueryPipeline * pipeline)
 
         try
         {
-            rendered_plan = "FAILED TO RENDER PLAN: " + getCurrentExceptionMessage(/*with_stacktrace=*/ false);
+            /// The result is written into a JSON column, so a failure has to be reported as JSON as
+            /// well: a bare message would fail to parse in QueryLogElement::appendToBlock and take
+            /// the whole log flush with it. Going through JSONBuilder also escapes whatever the
+            /// exception message happens to contain.
+            auto error_map = std::make_unique<JSONBuilder::JSONMap>();
+            error_map->add("Error", getCurrentExceptionMessage(/*with_stacktrace=*/ false));
+            plan_json = toJSONString(std::move(error_map));
         }
         catch (...)
         {
-            rendered_plan.emplace();
+            /// Empty rather than invalid: the column takes its default, an empty JSON object.
+            plan_json.emplace();
         }
     }
 }

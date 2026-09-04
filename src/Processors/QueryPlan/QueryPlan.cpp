@@ -24,6 +24,7 @@
 #include <Processors/QueryPlan/IQueryPlanStep.h>
 #include <Processors/QueryPlan/CreatingSetsStep.h>
 #include <Processors/QueryPlan/DistributedPlanSets.h>
+#include <Processors/QueryPlan/StepStatsJSONPrinter.h>
 #include <Processors/QueryPlan/Optimizations/Optimizations.h>
 #include <Processors/QueryPlan/Optimizations/QueryPlanOptimizationSettings.h>
 #include <Processors/QueryPlan/QueryPlan.h>
@@ -292,7 +293,7 @@ QueryPipelineBuilderPtr QueryPlan::buildQueryPipeline(
     return last_pipeline;
 }
 
-static void explainStep(const IQueryPlanStep & step, JSONBuilder::JSONMap & map, const ExplainPlanOptions & options)
+static void explainStep(const IQueryPlanStep & step, JSONBuilder::JSONMap & map, const ExplainPlanOptions & options, StepStatsStorage * steps_to_stats)
 {
     map.add("Node Type", step.getName());
     map.add("Node Id", step.getUniqID());
@@ -340,7 +341,7 @@ static void explainStep(const IQueryPlanStep & step, JSONBuilder::JSONMap & map,
         map.add("Input Headers", std::move(input_headers_array));
     }
 
-    if (options.actions)
+    if (options.actions && !steps_to_stats)
         step.describeActions(map);
 
     if (options.indexes)
@@ -348,9 +349,11 @@ static void explainStep(const IQueryPlanStep & step, JSONBuilder::JSONMap & map,
 
     if (options.projections)
         step.describeProjections(map);
+    if (steps_to_stats)
+        map.add("Statistics", StepStatsJSONPrinter::toJSON(steps_to_stats->analyzeStep(&step)));
 }
 
-JSONBuilder::ItemPtr QueryPlan::explainPlan(const ExplainPlanOptions & options) const
+JSONBuilder::ItemPtr QueryPlan::explainPlan(const ExplainPlanOptions & options, StepStatsStorage * steps_to_stats) const
 {
     checkInitialized();
 
@@ -377,7 +380,7 @@ JSONBuilder::ItemPtr QueryPlan::explainPlan(const ExplainPlanOptions & options) 
                 frame.children_array = std::make_unique<JSONBuilder::JSONArray>();
 
             frame.node_map = std::make_unique<JSONBuilder::JSONMap>();
-            explainStep(*frame.node->step, *frame.node_map, options);
+            explainStep(*frame.node->step, *frame.node_map, options, steps_to_stats);
         }
 
         if (frame.next_child < frame.node->children.size())
@@ -393,7 +396,7 @@ JSONBuilder::ItemPtr QueryPlan::explainPlan(const ExplainPlanOptions & options) 
                 frame.children_array = std::make_unique<JSONBuilder::JSONArray>();
 
             for (const auto & child_plan : child_plans)
-                frame.children_array->add(child_plan->explainPlan(options));
+                frame.children_array->add(child_plan->explainPlan(options, steps_to_stats));
 
             if (frame.children_array)
                 frame.node_map->add("Plans", std::move(frame.children_array));

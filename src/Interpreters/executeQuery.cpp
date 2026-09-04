@@ -737,6 +737,12 @@ static QueryPipelineFinalizedInfo finalizeQueryPipelineBeforeLogging(QueryPipeli
         .pipeline_dump = std::move(pipeline_dump)};
 }
 
+static void attachQueryPlan(const ContextPtr & context, QueryLogElement & elem)
+{
+    if (auto plan_profiler = context->getPlanProfiler(); plan_profiler && plan_profiler->hasQueryPlan())
+        elem.query_plan = plan_profiler->getPlanJSON();
+}
+
 static void logQueryFinishImpl(
     QueryLogElement & elem,
     const ContextMutablePtr & context,
@@ -813,7 +819,10 @@ static void logQueryFinishImpl(
             && static_cast<Int64>(elem.query_duration_ms) >= settings[Setting::log_queries_min_query_duration_ms].totalMilliseconds())
         {
             if (auto query_log = context->getQueryLog())
+            {
+                attachQueryPlan(context, elem);
                 query_log->add([&](QueryLogElement & e) { e = elem; });
+            }
         }
 
     }
@@ -950,7 +959,10 @@ void logQueryException(
         && static_cast<Int64>(elem.query_duration_ms) >= settings[Setting::log_queries_min_query_duration_ms].totalMilliseconds())
     {
         if (auto query_log = context->getQueryLog())
+        {
+            attachQueryPlan(context, elem);
             query_log->add([&](QueryLogElement & e) { e = elem; });
+        }
     }
 
     if (query_span)
@@ -1061,6 +1073,7 @@ void logExceptionBeforeStart(
                     "Not adding query settings to 'system.query_log' since setting `log_query_settings` is false"
                     " (the setting was changed for the query).");
 
+            attachQueryPlan(context, elem);
             query_log->add([&](QueryLogElement & e) { e = elem; });
         }
         else if (!settings[Setting::log_queries])

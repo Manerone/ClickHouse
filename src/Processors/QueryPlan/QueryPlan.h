@@ -160,7 +160,7 @@ public:
         bool compact_repeated_processor_chains = false;
     };
 
-    JSONBuilder::ItemPtr explainPlan(const ExplainPlanOptions & options) const;
+    JSONBuilder::ItemPtr explainPlan(const ExplainPlanOptions & options, StepStatsStorage * steps_to_stats = nullptr) const;
 
     void explainPlan(
         WriteBuffer & buffer,
