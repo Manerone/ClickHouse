@@ -122,7 +122,16 @@ void InterpreterParallelWithQuery::executeSubqueries(const ASTs & subqueries)
 
 void InterpreterParallelWithQuery::executeSubquery(ASTPtr subquery, ContextMutablePtr subquery_context)
 {
-    auto query_io = executeQuery(subquery->formatWithSecretsOneLine(), subquery_context, QueryFlags{ .internal = true }).second;
+    /// The subqueries are executed as `internal` queries because they are nested: they must not be registered in
+    /// the ProcessList and must not open their own query span (see `executeQueryImpl`, where an `internal` query
+    /// deliberately gets no `SpanHolder` so that the spans on the current stack still finish in the correct order).
+    /// Their text is written by the user though, so `user_initiated` is set to keep them subject to all the
+    /// restrictions of a regular user query - without it `InterpreterCreateQuery::getRequiredAccess` would treat
+    /// them as server-initiated and skip the access checks of `CREATE` subqueries entirely.
+    auto query_io
+        = executeQuery(
+              subquery->formatWithSecretsOneLine(), subquery_context, QueryFlags{ .internal = true, .user_initiated = true })
+              .second;
 
     auto & pipeline = query_io.pipeline;
 
