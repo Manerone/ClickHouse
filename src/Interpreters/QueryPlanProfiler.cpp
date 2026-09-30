@@ -53,6 +53,70 @@ ExplainPlanOptions planExplainOptions()
     };
 }
 
+/// Records, on every step that reads a set built by a subquery, the id of that subquery.
+///
+/// Must run while the `ActionsDAG`s are still in the plan.
+void recordConsumedSubqueries(QueryPlan & plan)
+{
+    const auto collect_from_dag = [](const ActionsDAG & dag, IQueryPlanStep & step)
+    {
+        /// Scalar subqueries, whose folded value may no longer be identifiable node by node.
+        for (size_t id : dag.getScalarSubqueryIds())
+            step.addConsumedSubqueryId(id);
+
+        for (const auto & node : dag.getNodes())
+        {
+            if (node.type != ActionsDAG::ActionType::COLUMN || !node.column)
+                continue;
+
+            /// A scalar subquery leaves only its value behind, so the planner wrote the ids onto
+            /// the constant as it built the actions.
+            for (size_t id : node.scalar_subquery_ids)
+                step.addConsumedSubqueryId(id);
+
+            const auto * column_set = checkAndGetColumn<const ColumnSet>(&node.column->getDataColumn());
+            if (!column_set)
+                continue;
+
+            const auto future_set = column_set->getData();
+            if (const auto * from_subquery = dynamic_cast<const FutureSetFromSubquery *>(future_set.get()))
+                step.addConsumedSubqueryId(from_subquery->getSubqueryId());
+        }
+    };
+
+    /// Every step is asked for the `ActionsDAG`s it owns, so a step type that can carry a set is
+    /// never missed here: a `HAVING ... IN (SELECT ...)` survives as a `TotalsHavingStep`, and a
+    /// pushed-down `PREWHERE` as part of the read.
+    const auto collect_from_step = [&](IQueryPlanStep & step)
+    {
+        step.forEachActionsDAG([&](const ActionsDAG & dag) { collect_from_dag(dag, step); });
+    };
+
+    std::vector<QueryPlan::Node *> stack;
+    if (plan.isInitialized())
+        stack.push_back(plan.getRootNode());
+
+    while (!stack.empty())
+    {
+        auto * node = stack.back();
+        stack.pop_back();
+        if (!node || !node->step)
+            continue;
+
+        collect_from_step(*node->step);
+
+        for (auto * child : node->children)
+            stack.push_back(child);
+
+        /// A child plan is its own tree but the same query, and its steps can consume the same sets.
+        /// Only the ones already built: asking a step to build them would be the capture changing
+        /// what the query does.
+        for (auto * child_plan : node->step->getBuiltChildPlans())
+            if (child_plan && child_plan->getRootNode())
+                stack.push_back(child_plan->getRootNode());
+    }
+}
+
 void maskSensitiveValues(JSONBuilder::IItem & item)
 {
     auto masker = SensitiveDataMasker::getInstance();
@@ -89,7 +153,8 @@ QueryPlan & QueryPlanProfiler::captureQueryPlan(QueryPlan plan_)
 
     running.query_plan.emplace(std::move(plan_));
 
-    /// Reads the ActionsDAGs, which building the pipeline moves out of the steps.
+    /// Both of these read the ActionsDAGs, which building the pipeline moves out of the steps.
+    recordConsumedSubqueries(*running.query_plan);
     running.pretty_names.emplace(
         QueryPlanFormat::buildPrettyNamesPerPlan(*running.query_plan)
     );
@@ -157,6 +222,171 @@ void QueryPlanProfiler::instrumentPipeline(QueryPipeline & pipeline) const
     pipeline.setStepWallClockRegistry(std::move(registry));
 }
 
+SubPlanCapture::SubPlanCapture(
+    QueryPlanProfilerPtr profiler_,
+    const QueryPlan & plan_,
+    PrettyNamesPerPlan pretty_names_,
+    size_t subquery_id_,
+    SubPlanKind kind_)
+    : profiler(std::move(profiler_))
+    , plan(&plan_)
+    , pretty_names(std::move(pretty_names_))
+    , subquery_id(subquery_id_)
+    , kind(kind_)
+{
+}
+
+SubPlanCapture::SubPlanCapture(SubPlanCapture && other) noexcept
+    : profiler(std::move(other.profiler))
+    , plan(other.plan)
+    , pretty_names(std::move(other.pretty_names))
+    , subquery_id(other.subquery_id)
+    , kind(other.kind)
+{
+    /// Leaves `other` inert, so only one of the two ever publishes.
+    other.profiler.reset();
+}
+
+SubPlanCapture & SubPlanCapture::operator=(SubPlanCapture && other) noexcept
+{
+    if (this == &other)
+        return *this;
+
+    /// Whatever this capture was holding is finished with, and publishing the structure is better
+    /// than discarding it. A no-op in the usual case, where the target is still inert.
+    publish(nullptr);
+
+    profiler = std::move(other.profiler);
+    plan = other.plan;
+    pretty_names = std::move(other.pretty_names);
+    subquery_id = other.subquery_id;
+    kind = other.kind;
+    other.profiler.reset();
+
+    return *this;
+}
+
+SubPlanCapture::~SubPlanCapture()
+{
+    /// Reached when `finish` never ran -- an exception while the sub-pipeline was executing, or a
+    /// caller that stopped early.
+    publish(nullptr);
+}
+
+void SubPlanCapture::publish(const StepStatisticsCollector * stats) noexcept
+{
+    if (!profiler)
+        return;
+
+    /// Avoids publishing the plan a second time afterwards
+    auto owner = std::move(profiler);
+
+    /// Allocations belong to the profiler and no exception may escape.
+    MemoryTrackerBlockerInThread block_memory_tracker;
+
+    try
+    {
+        auto serialized = captureSubPlanData(
+            *plan,
+            planExplainOptions(),
+            owner->max_description_length,
+            subquery_id,
+            kind,
+            stats,
+            &pretty_names);
+
+        /// `captureSubPlan` already refused a plan without a root, so a rooted plan serializing to
+        /// nothing means the walk and the plan disagree. The return keeps a release build from
+        /// storing an entry whose `Root` names a node the document does not contain.
+        chassert(!serialized.nodes.empty());
+        if (serialized.nodes.empty())
+            return;
+
+        owner->addSubPlan(std::move(serialized));
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+    }
+}
+
+void SubPlanCapture::instrument(QueryPipeline & pipeline)
+{
+    if (!profiler)
+        return;
+
+    MemoryTrackerBlockerInThread block_memory_tracker;
+
+    try
+    {
+        auto registry = std::make_unique<StepWallClockRegistry>();
+        registry->populateFromPlan(*plan, /*only_built_child_plans=*/ true);
+        pipeline.setStepWallClockRegistry(std::move(registry));
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+    }
+}
+
+void SubPlanCapture::finish(QueryPipeline & pipeline)
+{
+    if (!profiler)
+        return;
+
+    std::optional<StepStatisticsCollector> stats;
+
+    {
+        MemoryTrackerBlockerInThread block_memory_tracker;
+
+        try
+        {
+            UInt64 execution_time_ns = 0;
+            if (const auto * registry = pipeline.getStepClocks())
+                execution_time_ns = registry->getExecutionTimeNs();
+            stats.emplace(pipeline, *plan, execution_time_ns);
+        }
+        catch (...)
+        {
+            tryLogCurrentException(__PRETTY_FUNCTION__);
+        }
+    }
+
+    publish(stats ? &*stats : nullptr);
+}
+
+SubPlanCapture QueryPlanProfiler::captureSubPlan(
+    const ContextPtr & context, QueryPlan & sub_plan, size_t subquery_id, SubPlanKind kind)
+{
+    auto profiler = context->getPlanProfiler();
+    if (!profiler)
+        return {};
+
+    if (!sub_plan.isInitialized() || !sub_plan.getRootNode())
+        return {};
+
+    MemoryTrackerBlockerInThread block_memory_tracker;
+
+    try
+    {
+        recordConsumedSubqueries(sub_plan);
+
+        return SubPlanCapture(
+            std::move(profiler), sub_plan, QueryPlanFormat::buildPrettyNamesPerPlan(sub_plan), subquery_id, kind);
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+        return {};
+    }
+}
+
+void QueryPlanProfiler::addSubPlan(CapturedSubPlan sub_plan)
+{
+    std::lock_guard lock(running.sub_plans_mutex);
+    running.sub_plans.push_back(std::move(sub_plan));
+}
+
 void QueryPlanProfiler::captureStatistics(QueryPipeline & pipeline)
 {
     /// Otherwise there is nothing for the statistics to be about, and the pipeline that produced
@@ -208,6 +438,8 @@ void QueryPlanProfiler::capture(QueryPipeline * pipeline)
             stats ? &*stats : nullptr,
             running.pretty_names ? &*running.pretty_names : nullptr);
 
+        std::lock_guard lock(running.sub_plans_mutex);
+        result.sub_plans = std::move(running.sub_plans);
         captured = std::move(result);
     }
     catch (...)

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <algorithm>
+#include <functional>
+
 #include <Common/VectorWithMemoryTracking.h>
 #include <Core/Block_fwd.h>
 #include <Core/SortDescription.h>
@@ -149,6 +152,16 @@ public:
     /// It won't do any validation of new streams, so it is your responsibility to ensure that this update doesn't break anything
     String getUniqID() const;
 
+    /// Ids of the subqueries whose results this step consumes.
+    const std::vector<size_t> & getConsumedSubqueryIds() const { return consumed_subquery_ids; }
+    void addConsumedSubqueryId(size_t id)
+    {
+        /// A step can reach the same set twice -- the index-analysis filter and the PREWHERE hold
+        /// the same condition -- and it consumes it once.
+        if (std::find(consumed_subquery_ids.begin(), consumed_subquery_ids.end(), id) == consumed_subquery_ids.end())
+            consumed_subquery_ids.push_back(id);
+    }
+
     /// (e.g. you correctly remove / add columns).
     void updateInputHeaders(SharedHeaders input_headers_);
     void updateInputHeader(SharedHeader input_header, size_t idx = 0);
@@ -161,6 +174,15 @@ public:
     /// silently bypass the guards in `FutureSetFromSubquery::buildSetInplace` and
     /// `buildOrderedSetInplace`, and trigger `Trying to execute PLACEHOLDER action`.
     virtual bool hasCorrelatedExpressions() const;
+
+    /// Calls `visitor` for every `ActionsDAG` this step owns, so a caller can inspect the
+    /// expressions of a plan without knowing the step types. Most steps own none and inherit this.
+    ///
+    /// A step that holds an expression and does not override this reports nothing rather than
+    /// failing, which is how the DAGs of `TotalsHavingStep`, `FillingStep` and `IEJoinStep` went
+    /// unnoticed: the subqueries they consume were captured but never attributed to them.
+    using ActionsDAGVisitor = std::function<void(const ActionsDAG &)>;
+    virtual void forEachActionsDAG(const ActionsDAGVisitor & /*visitor*/) const {}
 
     /// `considerEnablingParallelReplicas` gates on the whole plan: one step returning false rejects it
     /// and no statistics are collected. A step that returns true must also attach a
@@ -244,6 +266,10 @@ protected:
 
 private:
     PlanStepIndex step_index;
+
+    /// See `getConsumedSubqueryIds`. Not copied with the step: a copy is a different step, and the
+    /// walk that fills this runs once per plan, after any copying is done.
+    std::vector<size_t> consumed_subquery_ids;
 };
 
 }

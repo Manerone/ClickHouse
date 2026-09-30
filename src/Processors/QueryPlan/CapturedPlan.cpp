@@ -142,6 +142,7 @@ CapturedStep captureStep(
 
     captured.id = step.getUniqID();
     captured.type = step.getName();
+    captured.consumed_subquery_ids = step.getConsumedSubqueryIds();
     captured.description = stepDescription(step, options, max_description_length);
     captured.details = stepDetails(step, options, plan_pretty_names);
     captured.indexes = stepIndexes(step, options);
@@ -211,6 +212,42 @@ std::vector<CapturedStep> capturePlanSteps(
     return collected;
 }
 
+}
+
+std::string_view toString(SubPlanKind kind)
+{
+    switch (kind)
+    {
+        case SubPlanKind::Set: return "Set";
+        case SubPlanKind::Scalar: return "Scalar";
+    }
+}
+
+CapturedSubPlan captureSubPlanData(
+    const QueryPlan & plan,
+    const ExplainPlanOptions & options,
+    size_t max_description_length,
+    size_t subquery_id,
+    SubPlanKind kind,
+    const StepStatisticsCollector * steps_to_stats,
+    const PrettyNamesPerPlan * pretty_names)
+{
+    CapturedSubPlan result;
+    if (!plan.isInitialized() || !plan.getRootNode())
+        return result;
+
+    result.subquery_id = subquery_id;
+    result.kind = kind;
+    result.root_id = plan.getRootNode()->step->getUniqID();
+    result.nodes = capturePlanSteps(plan, options, max_description_length, steps_to_stats, pretty_names);
+
+    if (steps_to_stats)
+    {
+        result.execution_time_ns = steps_to_stats->getExecutionTimeNs();
+        result.max_threads = steps_to_stats->getMaxThreads();
+    }
+
+    return result;
 }
 
 CapturedPlan capturePlan(
