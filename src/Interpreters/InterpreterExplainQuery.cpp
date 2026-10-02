@@ -1444,7 +1444,6 @@ QueryPipeline InterpreterExplainQuery::executeImpl()
 
             planning_ns += watch.elapsed();
 
-            /// EXPLAIN wants the lazily built child plans, so this walk may build them.
             auto step_profiler = std::make_shared<StepProfiler>(plan, analyzed.time, /*only_built_child_plans=*/ false);
             pipeline.setStepProfiler(step_profiler);
 
