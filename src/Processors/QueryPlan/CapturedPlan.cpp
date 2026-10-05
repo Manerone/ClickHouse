@@ -98,6 +98,17 @@ PlanIndexStats stepIndexes(const IQueryPlanStep & step, const ExplainPlanOptions
     return read_from_merge_tree->getIndexStats();
 }
 
+/// See `stepIndexes`: the same data, from the same step. A query served from a projection says so
+/// here, and `EXPLAIN` already shows it, so the captured plan would otherwise hide the choice.
+PlanProjectionStats stepProjections(const IQueryPlanStep & step, const ExplainPlanOptions & options)
+{
+    const auto * read_from_merge_tree = typeid_cast<const ReadFromMergeTree *>(&step);
+    if (!options.projections || !read_from_merge_tree)
+        return {};
+
+    return read_from_merge_tree->getProjectionStats();
+}
+
 /// What the pipeline measured for this step. Absent when there was no pipeline to measure -- a
 /// query that failed before finishing is captured without statistics.
 std::optional<AnalyzedStepData> stepStatistics(
@@ -137,6 +148,7 @@ CapturedStep captureStep(
     captured.description = stepDescription(step, options, max_description_length);
     captured.details = stepDetails(step, options, max_description_length, plan_pretty_names);
     captured.indexes = stepIndexes(step, options);
+    captured.projections = stepProjections(step, options);
     captured.statistics = stepStatistics(step, steps_to_stats);
 
     return captured;

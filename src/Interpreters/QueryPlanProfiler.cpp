@@ -47,6 +47,7 @@ ExplainPlanOptions planExplainOptions()
     {
         .actions = true,
         .indexes = true,
+        .projections = true,
         .compact = true,
         .pretty = true,
     };
