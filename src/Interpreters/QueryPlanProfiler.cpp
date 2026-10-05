@@ -362,7 +362,11 @@ SubPlanCapture QueryPlanProfiler::captureSubPlan(
         recordConsumedSubqueries(sub_plan);
 
         return SubPlanCapture(
-            std::move(profiler), sub_plan, QueryPlanFormat::buildPrettyNamesPerPlan(sub_plan), subquery_id, kind);
+            std::move(profiler),
+            sub_plan,
+            QueryPlanFormat::buildPrettyNamesPerPlan(sub_plan, /*only_built_child_plans=*/ true),
+            subquery_id,
+            kind);
     }
     catch (...)
     {
