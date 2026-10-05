@@ -2562,8 +2562,22 @@ See also:
 
 - [`system.query_log`](/reference/system-tables/query_log)
 - [`EXPLAIN PLAN`](/reference/statements/explain#explain-plan)
+- [`log_query_plans_time`](#log_query_plans_time)
+- [`log_query_plans_join_matches`](#log_query_plans_join_matches)
 )", BETA, \
         {"26.10", false, false, "New setting to capture the query plan actually executed, together with per-step runtime statistics."}) \
+    DECLARE(Bool, log_query_plans_time, false, R"(
+When [`log_query_plans`](#log_query_plans) captures a query, also collect the work intervals of its processors, the same as the `time` setting of [`EXPLAIN ANALYZE`](/reference/statements/explain#explain-analyze-concurrency). The plan stored in `system.query_log.query_plan` then has `Time` and `Concurrency` groups on its steps, with the wall-clock time and the concurrency level of each step and of its branch.
+
+Has no effect unless `log_query_plans` is enabled and the query is captured.
+)", BETA, \
+        {"26.10", false, false, "New setting to collect per-step wall-clock time and concurrency levels for the query plan written to `system.query_log`."}) \
+    DECLARE(Bool, log_query_plans_join_matches, false, R"(
+When [`log_query_plans`](#log_query_plans) captures a query, make its joins do the extra bookkeeping needed for the matched rows metrics in the cases where they cannot be derived from what the join produces anyway, the same as the `matches` setting of [`EXPLAIN ANALYZE`](/reference/statements/explain#explain-analyze-join-steps). Where the metrics can be derived, they are stored without this setting.
+
+Has no effect unless `log_query_plans` is enabled and the query is captured.
+)", BETA, \
+        {"26.10", false, false, "New setting to collect exact matched rows metrics of joins for the query plan written to `system.query_log`."}) \
     DECLARE(DistributedProductMode, distributed_product_mode, DistributedProductMode::DENY, R"(
 Changes the behaviour of [distributed subqueries](/reference/statements/in).
 

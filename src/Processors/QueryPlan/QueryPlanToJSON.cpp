@@ -61,6 +61,11 @@ JSONBuilder::ItemPtr capturedPlanToJSON(const CapturedPlan & captured)
     if (captured.max_threads)
         result->add("MaxThreads", *captured.max_threads);
 
+    auto collected = std::make_unique<JSONBuilder::JSONMap>();
+    collected->add("Time", captured.collected.work_intervals);
+    collected->add("JoinMatches", captured.collected.join_matches);
+    result->add("Collected", std::move(collected));
+
     auto output_array = std::make_unique<JSONBuilder::JSONArray>();
     for (const auto & column : captured.output)
         output_array->add(column);

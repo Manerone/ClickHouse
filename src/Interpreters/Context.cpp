@@ -365,6 +365,8 @@ namespace Setting
     extern const SettingsString parallel_replicas_custom_key;
     extern const SettingsBool parallel_replicas_prefer_local_replica;
     extern const SettingsUInt64 prefetch_buffer_size;
+    extern const SettingsBool log_query_plans_join_matches;
+    extern const SettingsBool log_query_plans_time;
     extern const SettingsUInt64 query_plan_max_step_description_length;
     extern const SettingsBool read_from_filesystem_cache_if_exists_otherwise_bypass_cache;
     extern const SettingsBool read_from_page_cache_if_exists_otherwise_bypass_cache;
@@ -9310,9 +9312,14 @@ const ServerSettings & Context::getServerSettings() const
 
 void Context::enablePlanProfiler()
 {
+    const auto & settings = getSettingsRef();
+    const bool collect_join_matches = settings[Setting::log_query_plans_join_matches];
+
     query_plan_profiler = std::make_shared<QueryPlanProfiler>(
-        getSettingsRef()[Setting::query_plan_max_step_description_length]);
-    setJoinAnalyzeMode(JoinAnalyzeMode::Derived);
+        settings[Setting::query_plan_max_step_description_length],
+        settings[Setting::log_query_plans_time],
+        collect_join_matches);
+    setJoinAnalyzeMode(collect_join_matches ? JoinAnalyzeMode::Exact : JoinAnalyzeMode::Derived);
 }
 
 QueryPlanProfilerPtr Context::getPlanProfiler() const

@@ -140,11 +140,10 @@ void QueryPlanProfiler::instrumentPipeline(QueryPipeline & pipeline)
     if (!running.query_plan || !running.query_plan->isInitialized())
         return;
 
-    /// Work intervals are only for `EXPLAIN ANALYZE`; the plan column does not render them yet.
     /// The clocks are attached from the plans the steps already hold, so instrumenting a pipeline
     /// does not make a step build anything.
     running.step_profiler = std::make_shared<StepProfiler>(
-        *running.query_plan, /*collect_work_intervals_=*/ false, /*only_built_child_plans=*/ true);
+        *running.query_plan, collected.work_intervals, /*only_built_child_plans=*/ true);
     pipeline.setStepProfiler(running.step_profiler);
 }
 
@@ -198,6 +197,7 @@ void QueryPlanProfiler::capture(QueryPipeline * pipeline)
             max_description_length,
             stats ? &*stats : nullptr,
             running.pretty_names ? &*running.pretty_names : nullptr);
+        result.collected = collected;
 
         captured = std::move(result);
     }

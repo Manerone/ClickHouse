@@ -15,8 +15,9 @@ using StepProfilerPtr = std::shared_ptr<StepProfiler>;
 class QueryPlanProfiler
 {
 public:
-    explicit QueryPlanProfiler(size_t max_description_length_)
+    QueryPlanProfiler(size_t max_description_length_, bool collect_work_intervals_, bool collect_join_matches_)
         : max_description_length(max_description_length_)
+        , collected{.work_intervals = collect_work_intervals_, .join_matches = collect_join_matches_}
     {
     }
 
@@ -59,6 +60,10 @@ private:
     }
 
     const size_t max_description_length;
+
+    /// What the query was asked to collect beyond the default statistics; written into the plan
+    /// so a reader can tell a metric that was not collected from one the step does not have.
+    const CollectedStatistics collected;
 
     /// Set of fields the profiler needs to keep alive while the query is still being executed.
     /// Once the query finishes, or throws, these fields are cleared and only `captured` has

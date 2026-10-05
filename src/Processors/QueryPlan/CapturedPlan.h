@@ -35,6 +35,15 @@ struct CapturedStep
     PlanIndexStats indexes;
 };
 
+/// Statistics a query collects only when asked to, because collecting them costs extra.
+struct CollectedStatistics
+{
+    /// Work intervals of the processors, which the per-step `Time` and `Concurrency` groups come from.
+    bool work_intervals = false;
+    /// The extra bookkeeping in joins behind the matched rows metrics that cannot be derived.
+    bool join_matches = false;
+};
+
 /// A whole query: its own steps and the totals.
 struct CapturedPlan
 {
@@ -46,7 +55,10 @@ struct CapturedPlan
     std::optional<UInt64> execution_time_ns;
     std::optional<UInt64> max_threads;
 
-    std::vector<CapturedStep> nodes;};
+    CollectedStatistics collected;
+
+    std::vector<CapturedStep> nodes;
+};
 
 /// Captures the plan into a `CapturedPlan` object
 ///
