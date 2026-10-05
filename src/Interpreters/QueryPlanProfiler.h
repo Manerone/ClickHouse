@@ -5,14 +5,13 @@
 #include <Processors/QueryPlan/QueryPlan.h>
 #include <Processors/QueryPlan/QueryPlanFormat.h>
 #include <Processors/QueryPlan/CapturedPlan.h>
-#include <Processors/QueryPlan/QueryPlanToJSON.h>
-#include <mutex>
 namespace DB
 {
 
 class QueryPipeline;
-class QueryPlanProfiler;
-class StepStatisticsCollector;
+class AnalyzeStepsStats;
+class StepProfiler;
+using StepProfilerPtr = std::shared_ptr<StepProfiler>;
 
 /// Records one plan that runs for a query without being part of its plan tree. For example:
 ///     - an `IN (SELECT ...)` whose set is built during planning so that index analysis can use it
@@ -32,7 +31,7 @@ public:
     SubPlanCapture(SubPlanCapture && other) noexcept;
     SubPlanCapture & operator=(SubPlanCapture && other) noexcept;
 
-    /// Attaches a StepWallClockRegistry, without which every step of the sub-plan renders as
+    /// Attaches a StepProfiler, without which every step of the sub-plan renders as
     /// "time 0.00 ns". Call after the pipeline is built and before it runs.
     void instrument(QueryPipeline & pipeline);
 
@@ -49,13 +48,14 @@ private:
         SubPlanKind kind_);
 
     /// Serializes the sub-plan and gives it to the profiler, once.
-    void publish(const StepStatisticsCollector * stats) noexcept;
+    void publish(const AnalyzeStepsStats * stats) noexcept;
 
     QueryPlanProfilerPtr profiler;
     const QueryPlan * plan = nullptr;
     PrettyNamesPerPlan pretty_names;
     size_t subquery_id = 0;
     SubPlanKind kind = SubPlanKind::Set;
+    StepProfilerPtr step_profiler;
 };
 
 class QueryPlanProfiler
@@ -94,9 +94,9 @@ public:
 
     size_t getMaxDescriptionLength() const { return max_description_length; }
 
-    /// Attaches a StepWallClockRegistry in the processors, otherwise they would report
+    /// Attaches a StepProfiler to the pipeline, otherwise the processors would report
     /// 0.00 ns as executed time.
-    void instrumentPipeline(QueryPipeline & pipeline) const;
+    void instrumentPipeline(QueryPipeline & pipeline);
 
 private:
     friend class SubPlanCapture;
@@ -126,6 +126,10 @@ private:
 
         /// QueryPlan has to be dropped as it holds `QueryPlanResourceHolder`.
         std::optional<QueryPlan> query_plan;
+
+        /// Attached to the pipeline so the processors can time their steps; kept so the statistics
+        /// can be read back off it once the query has run.
+        StepProfilerPtr step_profiler;
         std::optional<PrettyNamesPerPlan> pretty_names;
 
         /// `sub_plans` is not cleared here: `finish` moves it into the capture under the lock,
@@ -133,6 +137,7 @@ private:
         void release()
         {
             query_plan.reset();
+            step_profiler.reset();
             pretty_names.reset();
         }
     };

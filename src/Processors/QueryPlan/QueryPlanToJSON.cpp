@@ -1,13 +1,12 @@
 #include <Processors/QueryPlan/QueryPlanToJSON.h>
 
 #include <Processors/QueryPlan/PlanIndexStats.h>
-#include <Processors/QueryPlan/StepStatisticsJSONPrinter.h>
+#include <Processors/QueryPlan/Profiling/Analysis/StepStatisticsJSONPrinter.h>
 #include <base/types.h>
 
 #include <memory>
 #include <unordered_map>
 #include <vector>
-
 
 namespace DB
 {
@@ -38,8 +37,6 @@ JSONBuilder::ItemPtr capturedStepToJSON(const CapturedStep & step, std::optional
 
     if (auto indexes = indexStatsToJSON(step.indexes))
         map->add("Indexes", std::move(indexes));
-    if (auto projections = projectionStatsToJSON(step.projections))
-        map->add("Projections", std::move(projections));
 
     if (sub_plan_id)
         map->add("SubPlanId", *sub_plan_id);

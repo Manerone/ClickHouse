@@ -2,7 +2,7 @@
 
 #include <Common/JSONBuilder.h>
 #include <Processors/QueryPlan/PlanIndexStats.h>
-#include <Processors/QueryPlan/StepStatisticsModel.h>
+#include <Processors/QueryPlan/Profiling/Analysis/StepStatsModel.h>
 #include <base/types.h>
 
 #include <cstddef>
@@ -11,12 +11,11 @@
 #include <string_view>
 #include <vector>
 
-
 namespace DB
 {
 
 class QueryPlan;
-class StepStatisticsCollector;
+class AnalyzeStepsStats;
 struct ExplainPlanOptions;
 struct PrettyNamesPerPlan;
 
@@ -47,9 +46,8 @@ struct CapturedStep
 
     std::optional<AnalyzedStepData> statistics;
 
-    /// What index and projection analysis decided. Only a `ReadFromMergeTree` has any.
+    /// What index analysis decided. Only a `ReadFromMergeTree` has any.
     PlanIndexStats indexes;
-    PlanProjectionStats projections;
 };
 
 /// A plan that ran for the query but is not part of its plan tree.
@@ -95,7 +93,7 @@ CapturedPlan capturePlan(
     const QueryPlan & plan,
     const ExplainPlanOptions & options,
     size_t max_description_length,
-    const StepStatisticsCollector * steps_to_stats,
+    const AnalyzeStepsStats * steps_to_stats,
     const PrettyNamesPerPlan * pretty_names);
 
 /// The same for a sub-plan, whose pipeline is its own and finishes before the query does.
@@ -105,7 +103,7 @@ CapturedSubPlan captureSubPlanData(
     size_t max_description_length,
     size_t subquery_id,
     SubPlanKind kind,
-    const StepStatisticsCollector * steps_to_stats,
+    const AnalyzeStepsStats * steps_to_stats,
     const PrettyNamesPerPlan * pretty_names);
 
 }

@@ -1,7 +1,6 @@
 #include <Common/Exception.h>
 #include <Common/logger_useful.h>
 #include <Common/MemoryTrackerBlockerInThread.h>
-#include <Common/SensitiveDataMasker.h>
 #include <Core/Settings.h>
 #include <Interpreters/ClientInfo.h>
 #include <Interpreters/Context.h>
@@ -11,13 +10,13 @@
 #include <IO/WriteBufferFromString.h>
 #include <Formats/FormatSettings.h>
 #include <Common/JSONBuilder.h>
-#include <Processors/QueryPlan/StepStatisticsCollector.h>
+#include <Processors/QueryPlan/Profiling/Analysis/AnalyzePlanStats.h>
+#include <Processors/QueryPlan/Profiling/Execution/StepProfiler.h>
 #include <Processors/QueryPlan/QueryPlanToJSON.h>
 #include <Processors/QueryPlan/QueryPlanFormat.h>
 #include <Columns/ColumnConst.h>
 #include <Columns/ColumnSet.h>
 #include <Interpreters/PreparedSets.h>
-#include <Processors/StepWallClockRegistry.h>
 #include <QueryPipeline/QueryPipeline.h>
 
 namespace DB
@@ -117,19 +116,8 @@ void recordConsumedSubqueries(QueryPlan & plan)
     }
 }
 
-void maskSensitiveValues(JSONBuilder::IItem & item)
-{
-    auto masker = SensitiveDataMasker::getInstance();
-    if (!masker)
-        return;
-
-    item.transformStringValues([&](String & value) { masker->wipeSensitiveData(value); });
-}
-
 String toJSONString(JSONBuilder::ItemPtr item)
 {
-    maskSensitiveValues(*item);
-
     FormatSettings format_settings;
     format_settings.json.quote_64bit_integers = false;
 
@@ -156,7 +144,7 @@ QueryPlan & QueryPlanProfiler::captureQueryPlan(QueryPlan plan_)
     /// Both of these read the ActionsDAGs, which building the pipeline moves out of the steps.
     recordConsumedSubqueries(*running.query_plan);
     running.pretty_names.emplace(
-        QueryPlanFormat::buildPrettyNamesPerPlan(*running.query_plan)
+        QueryPlanFormat::buildPrettyNamesPerPlan(*running.query_plan, /*only_built_child_plans=*/ true)
     );
     return *running.query_plan;
 }
@@ -212,14 +200,17 @@ bool QueryPlanProfiler::canEnableProfiler(const ContextPtr & context, const ASTP
     return true;
 }
 
-void QueryPlanProfiler::instrumentPipeline(QueryPipeline & pipeline) const
+void QueryPlanProfiler::instrumentPipeline(QueryPipeline & pipeline)
 {
     if (!running.query_plan || !running.query_plan->isInitialized())
         return;
 
-    auto registry = std::make_unique<StepWallClockRegistry>();
-    registry->populateFromPlan(*running.query_plan, /*only_built_child_plans=*/ true);
-    pipeline.setStepWallClockRegistry(std::move(registry));
+    /// Work intervals are only for `EXPLAIN ANALYZE`; the plan column does not render them yet.
+    /// The clocks are attached from the plans the steps already hold, so instrumenting a pipeline
+    /// does not make a step build anything.
+    running.step_profiler = std::make_shared<StepProfiler>(
+        *running.query_plan, /*collect_work_intervals_=*/ false, /*only_built_child_plans=*/ true);
+    pipeline.setStepProfiler(running.step_profiler);
 }
 
 SubPlanCapture::SubPlanCapture(
@@ -273,7 +264,7 @@ SubPlanCapture::~SubPlanCapture()
     publish(nullptr);
 }
 
-void SubPlanCapture::publish(const StepStatisticsCollector * stats) noexcept
+void SubPlanCapture::publish(const AnalyzeStepsStats * stats) noexcept
 {
     if (!profiler)
         return;
@@ -319,9 +310,9 @@ void SubPlanCapture::instrument(QueryPipeline & pipeline)
 
     try
     {
-        auto registry = std::make_unique<StepWallClockRegistry>();
-        registry->populateFromPlan(*plan, /*only_built_child_plans=*/ true);
-        pipeline.setStepWallClockRegistry(std::move(registry));
+        step_profiler = std::make_shared<StepProfiler>(
+            *plan, /*collect_work_intervals_=*/ false, /*only_built_child_plans=*/ true);
+        pipeline.setStepProfiler(step_profiler);
     }
     catch (...)
     {
@@ -334,17 +325,16 @@ void SubPlanCapture::finish(QueryPipeline & pipeline)
     if (!profiler)
         return;
 
-    std::optional<StepStatisticsCollector> stats;
+    std::optional<AnalyzeStepsStats> stats;
 
     {
         MemoryTrackerBlockerInThread block_memory_tracker;
 
         try
         {
-            UInt64 execution_time_ns = 0;
-            if (const auto * registry = pipeline.getStepClocks())
-                execution_time_ns = registry->getExecutionTimeNs();
-            stats.emplace(pipeline, *plan, execution_time_ns);
+            if (step_profiler)
+                stats.emplace(pipeline, *plan, *step_profiler,
+                    step_profiler->getExecutionStartNs(), step_profiler->getExecutionTimeNs());
         }
         catch (...)
         {
@@ -422,13 +412,13 @@ void QueryPlanProfiler::capture(QueryPipeline * pipeline)
 
     try
     {
-        std::optional<StepStatisticsCollector> stats;
-        if (pipeline)
+        std::optional<AnalyzeStepsStats> stats;
+        if (pipeline && running.step_profiler)
         {
-            UInt64 execution_time_ns = 0;
-            if (const auto * registry = pipeline->getStepClocks())
-                execution_time_ns = registry->getExecutionTimeNs();
-            stats.emplace(*pipeline, *running.query_plan, execution_time_ns);
+            /// Both come from the profiler: the executor stamped the end when it finished, so the
+            /// duration does not include whatever the query-finish path does afterwards.
+            stats.emplace(*pipeline, *running.query_plan, *running.step_profiler,
+                running.step_profiler->getExecutionStartNs(), running.step_profiler->getExecutionTimeNs());
         }
 
         auto result = capturePlan(
