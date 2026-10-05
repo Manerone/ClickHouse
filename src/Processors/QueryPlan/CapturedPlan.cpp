@@ -22,8 +22,17 @@ namespace
 
 /// The step's own account of itself, one string per line. Like: `Filter column: ...`,
 /// `Sort description: ...`, `Limit ...`.
+///
+/// Each line is cut to `max_description_length`, as the one-line description is. A step renders its
+/// literals here, so a query carrying a large `IN` list produces a correspondingly large line, and
+/// this one is stored on a `system.query_log` row rather than streamed to the client as `EXPLAIN`
+/// does. The capture also runs with the memory tracker blocked, so without the cut the size of a
+/// row would answer to nothing.
 std::vector<String> stepDetails(
-    const IQueryPlanStep & step, const ExplainPlanOptions & options, const PrettyNames * plan_pretty_names)
+    const IQueryPlanStep & step,
+    const ExplainPlanOptions & options,
+    size_t max_description_length,
+    const PrettyNames * plan_pretty_names)
 {
     if (!options.actions)
         return {};
@@ -46,6 +55,12 @@ std::vector<String> stepDetails(
     /// Split the resulting lines into a vector of strings, dropping the empty ones.
     std::vector<String> details;
     splitInto<'\n'>(details, out.str(), /*token_compress=*/ true);
+
+    if (max_description_length)
+        for (auto & line : details)
+            if (line.size() > max_description_length)
+                line.resize(max_description_length);
+
     return details;
 }
 
@@ -120,7 +135,7 @@ CapturedStep captureStep(
     captured.id = step.getUniqID();
     captured.type = step.getName();
     captured.description = stepDescription(step, options, max_description_length);
-    captured.details = stepDetails(step, options, plan_pretty_names);
+    captured.details = stepDetails(step, options, max_description_length, plan_pretty_names);
     captured.indexes = stepIndexes(step, options);
     captured.statistics = stepStatistics(step, steps_to_stats);
 
