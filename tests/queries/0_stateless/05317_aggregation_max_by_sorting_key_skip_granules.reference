@@ -73,6 +73,31 @@ b	12
 -- not applied: a GROUP BY key that is not a function of the columns before m
 not applied
 not applied
+-- GROUP BY and DISTINCT without aggregates: the last granule of each run
+Granules: 4/12
+A	0
+A	1
+B	0
+B	1
+Granules: 2/12
+A
+B
+Granules: 3/7
+0
+1
+-- aggregates that depend only on the distinct values of the columns before m
+Granules: 4/12
+A	2	2	0	1	1
+B	2	2	0	1	1
+A	2	2	0	1	1
+B	2	2	0	1	1
+Granules: 4/12
+A	2	12
+B	2	12
+Granules: 2/12
+2
+not applied
+not applied
 -- not applied: max of a column outside the sorting key
 not applied
 -- not applied: an aggregate that needs every row

@@ -5,6 +5,7 @@
 #include <DataTypes/IDataType.h>
 #include <Interpreters/ActionsDAG.h>
 #include <Processors/QueryPlan/AggregatingStep.h>
+#include <Processors/QueryPlan/DistinctStep.h>
 #include <Processors/QueryPlan/Optimizations/projectionsCommon.h>
 #include <Processors/QueryPlan/ReadFromMergeTree.h>
 #include <Storages/MergeTree/IMergeTreeDataPart.h>
@@ -43,7 +44,13 @@ namespace DB::QueryPlanOptimizations
 ///   must be exact (not relaxed): a conjunct on a column outside the primary index, or on a function the
 ///   analysis does not know, disables the optimization.
 ///
-/// Supported aggregates: `max(k)`, `argMax(x, k)`, `min(k)` and `argMin(x, k)`, all on the same `k`.
+/// Supported aggregates: `max(k)`, `argMax(x, k)`, `min(k)` and `argMin(x, k)`, all on the same `k`, plus aggregates
+/// whose result depends only on the set of distinct values of arguments that depend only on the prefix (`min`, `max`,
+/// `any`, `uniq*`, `groupUniqArray`, ...), which only need every run to be present.
+///
+/// Without `max(k)`-like aggregates (`GROUP BY` with only such aggregates or none, and `DISTINCT`), the prefix is the
+/// shortest sorting key prefix that covers the keys and arguments, and the last granule of each run is kept, as for
+/// `max`: then every run is present.
 ///
 /// The rule assumes that every row of the part reaches the aggregation unless the filter removes it, and that
 /// the stored order is the order the aggregation uses. So it is not applied with `FINAL`, sampling, reverse
@@ -104,22 +111,63 @@ static bool dependsOnlyOn(const ActionsDAG::Node * predicate, const NameSet & co
     return true;
 }
 
-static void tryApply(AggregatingStep & aggregating, QueryPlan::Node & aggregating_node)
+/// Aggregate functions whose result depends only on the set of distinct values of their arguments, not on how
+/// many rows have each value. Over arguments that depend only on the prefix columns, they only need every run to
+/// be present, which keeping at least one granule per run guarantees.
+static bool dependsOnlyOnDistinctValues(const String & function_name)
 {
-    if (aggregating.isGroupingSets())
-        return;
+    static const std::unordered_set<String> names{
+        "min", "max", "any", "uniq", "uniqExact", "uniqCombined", "uniqCombined64", "uniqHLL12", "uniqTheta",
+        "groupUniqArray", "groupBitOr", "groupBitAnd", "sumDistinct", "avgDistinct"};
+    return names.contains(function_name);
+}
 
-    const auto & params = aggregating.getParams();
-    if (params.only_merge || params.overflow_row || params.aggregates.empty() || aggregating_node.children.size() != 1)
-        return;
+/// The inputs (columns of the reading step) that the output `name` of the expressions depends on.
+static std::optional<NameSet> getRequiredColumns(const std::optional<ActionsDAG> & dag, const String & name)
+{
+    if (!dag)
+        return NameSet{name};
 
+    const auto * output = dag->tryFindInOutputs(name);
+    if (!output)
+        return {};
+
+    NameSet columns;
+    std::vector<const ActionsDAG::Node *> stack{output};
+    std::unordered_set<const ActionsDAG::Node *> visited;
+    while (!stack.empty())
+    {
+        const auto * node = stack.back();
+        stack.pop_back();
+        if (!visited.insert(node).second)
+            continue;
+        if (node->type == ActionsDAG::ActionType::INPUT)
+            columns.insert(node->result_name);
+        for (const auto * child : node->children)
+            stack.push_back(child);
+    }
+    return columns;
+}
+
+/// Whether the output `name` of the expressions is a deterministic function of `columns`.
+static bool outputDependsOnlyOn(const std::optional<ActionsDAG> & dag, const String & name, const NameSet & columns)
+{
+    if (!dag)
+        return columns.contains(name);
+    const auto * output = dag->tryFindInOutputs(name);
+    return output && dependsOnlyOn(output, columns);
+}
+
+/// `input_node` is the input of an aggregation (`keys`, `aggregates`) or of a `DISTINCT` (`keys`, no aggregates).
+static void tryApply(QueryPlan::Node & input_node, const Names & keys, const AggregateDescriptions & aggregates)
+{
     /// The expressions and filters between the aggregation and the reading step: only `ExpressionStep` and
     /// `FilterStep`, plus `PREWHERE` and row policies of the reading step.
     QueryDAG query;
-    if (!query.build(*aggregating_node.children.front()))
+    if (!query.build(input_node))
         return;
 
-    QueryPlan::Node * node = aggregating_node.children.front();
+    QueryPlan::Node * node = &input_node;
     while (node->children.size() == 1)
         node = node->children.front();
     auto * reading = typeid_cast<ReadFromMergeTree *>(node->step.get());
@@ -134,42 +182,115 @@ static void tryApply(AggregatingStep & aggregating, QueryPlan::Node & aggregatin
     const auto & sorting_key = metadata->getSortingKey();
     const auto & primary_key = metadata->getPrimaryKey();
 
-    /// Whether some aggregate needs the last row of each run (`max`, `argMax`) or the first one (`min`, `argMin`).
-    bool need_group_end = false;
-    bool need_group_start = false;
-    std::optional<String> aggregated_column;
-    for (const auto & aggregate : params.aggregates)
+    auto sorting_key_position = [&](const std::optional<String> & column) -> std::optional<size_t>
+    {
+        if (!column)
+            return {};
+        auto it = std::find(sorting_key.column_names.begin(), sorting_key.column_names.end(), *column);
+        if (it == sorting_key.column_names.end())
+            return {};
+        return it - sorting_key.column_names.begin();
+    };
+
+    /// The argument of `max`/`min` or the second argument of `argMax`/`argMin`, if it is a column of the reading step.
+    auto order_column = [&](const AggregateDescription & aggregate) -> std::optional<String>
     {
         const String name = aggregate.function->getName();
-        size_t key_argument = 0;
         if ((name == "max" || name == "min") && aggregate.argument_names.size() == 1)
-            key_argument = 0;
-        else if ((name == "argMax" || name == "argMin") && aggregate.argument_names.size() == 2)
-            key_argument = 1;
-        else
-            return;
+            return mapToReadingColumn(query.dag, aggregate.argument_names[0]);
+        if ((name == "argMax" || name == "argMin") && aggregate.argument_names.size() == 2)
+            return mapToReadingColumn(query.dag, aggregate.argument_names[1]);
+        return {};
+    };
 
-        auto column = mapToReadingColumn(query.dag, aggregate.argument_names[key_argument]);
-        if (!column || (aggregated_column && *column != *aggregated_column))
-            return;
-        aggregated_column = std::move(column);
+    /// The aggregated column `k` is the sorting key column furthest in the sorting key among the arguments of `max`,
+    /// `min`, `argMax` and `argMin`. `min` and `max` of earlier columns depend only on the runs that are present.
+    std::optional<size_t> aggregated_position;
+    for (const auto & aggregate : aggregates)
+        if (auto position = sorting_key_position(order_column(aggregate)))
+            aggregated_position = std::max(aggregated_position.value_or(0), *position);
 
-        if (name == "min" || name == "argMin")
-            need_group_start = true;
-        else
-            need_group_end = true;
+    /// If a key or the argument of another aggregate needs that column or a later one (e.g. `min(k2)` with
+    /// `uniqExact(k2)`), there is no aggregated column: `min` and `max` then also depend only on the runs that are
+    /// present, with a longer prefix. `argMin` and `argMax` need the aggregated column.
+    if (aggregated_position)
+    {
+        const NameSet columns_before(sorting_key.column_names.begin(), sorting_key.column_names.begin() + *aggregated_position);
+        bool fits = std::ranges::all_of(keys, [&](const String & key) { return outputDependsOnlyOn(query.dag, key, columns_before); });
+        bool has_arg_function = false;
+        for (const auto & aggregate : aggregates)
+        {
+            const String name = aggregate.function->getName();
+            has_arg_function = has_arg_function || name == "argMin" || name == "argMax";
+            if (sorting_key_position(order_column(aggregate)) == aggregated_position)
+                continue;
+            for (const auto & argument : aggregate.argument_names)
+                fits = fits && outputDependsOnlyOn(query.dag, argument, columns_before);
+        }
+        if (!fits)
+        {
+            if (has_arg_function)
+                return;
+            aggregated_position.reset();
+        }
     }
 
-    /// The prefix is the sorting key columns before the aggregated one. They must be in the primary index.
-    const auto aggregated_position = std::find(sorting_key.column_names.begin(), sorting_key.column_names.end(), *aggregated_column);
-    if (aggregated_position == sorting_key.column_names.end())
-        return;
-    const size_t prefix_size = aggregated_position - sorting_key.column_names.begin();
+    /// Whether the last row of each run (`max`, `argMax`) or the first one (`min`, `argMin`) is needed. Without
+    /// them, only the presence of every run matters, which keeping the last granule of each run guarantees.
+    bool need_group_end = false;
+    bool need_group_start = false;
+    Names set_arguments;
+    for (const auto & aggregate : aggregates)
+    {
+        const String name = aggregate.function->getName();
+        if (aggregated_position && sorting_key_position(order_column(aggregate)) == aggregated_position)
+        {
+            if (name == "min" || name == "argMin")
+                need_group_start = true;
+            else
+                need_group_end = true;
+        }
+        else if (dependsOnlyOnDistinctValues(name))
+        {
+            set_arguments.insert(set_arguments.end(), aggregate.argument_names.begin(), aggregate.argument_names.end());
+        }
+        else
+            return;
+    }
+
+    /// The prefix: the sorting key columns before the aggregated one or, without it, the shortest sorting key prefix
+    /// that covers all columns of the keys and of the other aggregates' arguments.
+    size_t prefix_size = 0;
+    if (aggregated_position)
+    {
+        prefix_size = *aggregated_position;
+    }
+    else
+    {
+        need_group_end = true;
+        Names outputs = keys;
+        outputs.insert(outputs.end(), set_arguments.begin(), set_arguments.end());
+        for (const auto & output : outputs)
+        {
+            auto columns = getRequiredColumns(query.dag, output);
+            if (!columns)
+                return;
+            for (const auto & column : *columns)
+            {
+                auto position = sorting_key_position(column);
+                if (!position)
+                    return;
+                prefix_size = std::max(prefix_size, *position + 1);
+            }
+        }
+    }
+
     if (primary_key.column_names.size() < prefix_size)
         return;
 
     /// The prefix columns and the aggregated column must be sorted ascending, with types whose order the aggregation shares.
-    for (size_t i = 0; i <= prefix_size; ++i)
+    const size_t checked_columns = prefix_size + (aggregated_position ? 1 : 0);
+    for (size_t i = 0; i < checked_columns; ++i)
     {
         if (i < sorting_key.reverse_flags.size() && sorting_key.reverse_flags[i])
             return;
@@ -177,21 +298,15 @@ static void tryApply(AggregatingStep & aggregating, QueryPlan::Node & aggregatin
             return;
     }
 
-    /// Every `GROUP BY` key must be a deterministic function of the prefix columns (usually one of them), so that each
-    /// group is a union of whole runs.
-    const NameSet prefix_columns(sorting_key.column_names.begin(), aggregated_position);
-    for (const auto & key : params.keys)
-    {
-        if (!query.dag)
-        {
-            if (!prefix_columns.contains(key))
-                return;
-            continue;
-        }
-        const auto * key_node = query.dag->tryFindInOutputs(key);
-        if (!key_node || !dependsOnlyOn(key_node, prefix_columns))
+    /// Every key and every argument of the other aggregates must be a deterministic function of the prefix columns
+    /// (usually one of them), so that each group is a union of whole runs.
+    const NameSet prefix_columns(sorting_key.column_names.begin(), sorting_key.column_names.begin() + prefix_size);
+    for (const auto & key : keys)
+        if (!outputDependsOnlyOn(query.dag, key, prefix_columns))
             return;
-    }
+    for (const auto & argument : set_arguments)
+        if (!outputDependsOnlyOn(query.dag, argument, prefix_columns))
+            return;
 
     /// Split the filter: conjuncts on the prefix columns only remove whole runs; the other ones must hold for
     /// the witness rows, which is checked with an exact `KeyCondition` on the primary index.
@@ -317,9 +432,9 @@ static void tryApply(AggregatingStep & aggregating, QueryPlan::Node & aggregatin
     result->selected_rows = sum_rows;
     result->index_stats.emplace_back(ReadFromMergeTree::IndexStat{
         .type = ReadFromMergeTree::IndexType::MaxBySortingKey,
-        .description = need_group_start
-            ? "Skip granules that cannot contain the minimum or maximum of the next sorting key column"
-            : "Skip granules that cannot contain the maximum of the next sorting key column",
+        .description = !aggregated_position ? "Skip granules whose groups are all present in later granules"
+            : need_group_start              ? "Skip granules that cannot contain the minimum or maximum of the aggregated sorting key column"
+                                            : "Skip granules that cannot contain the maximum of the aggregated sorting key column",
         .num_parts_after = result->selected_parts,
         .num_granules_after = sum_marks});
 
@@ -344,8 +459,21 @@ void optimizeAggregationMaxBySortingKey(QueryPlan::Node & root)
         auto * node = frame.node;
         stack.pop_back();
 
+        if (node->children.size() != 1)
+            continue;
+
         if (auto * aggregating = typeid_cast<AggregatingStep *>(node->step.get()))
-            tryApply(*aggregating, *node);
+        {
+            const auto & params = aggregating->getParams();
+            if (!aggregating->isGroupingSets() && !params.only_merge && !params.overflow_row)
+                tryApply(*node->children.front(), params.keys, params.aggregates);
+        }
+        else if (auto * distinct = typeid_cast<DistinctStep *>(node->step.get()))
+        {
+            /// The lowest `DISTINCT` above the reading step: a final `DISTINCT` above a preliminary one has a
+            /// `DistinctStep` below it, so `QueryDAG` rejects it.
+            tryApply(*node->children.front(), distinct->getColumnNames(), {});
+        }
     }
 }
 

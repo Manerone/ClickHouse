@@ -76,7 +76,35 @@ SELECT '-- not applied: a GROUP BY key that is not a function of the columns bef
 SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
 FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT x % 2 AS p, max(m) FROM t GROUP BY p SETTINGS optimize_aggregation_max_by_sorting_key = 1));
 SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
-FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, max(k2) FROM t GROUP BY k, m SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, max(m) FROM t GROUP BY k, x SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+
+SELECT '-- GROUP BY and DISTINCT without aggregates: the last granule of each run';
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2 FROM t GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k, k2 FROM t GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT DISTINCT k FROM t SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT DISTINCT k FROM t ORDER BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT DISTINCT k2 FROM t WHERE k = 'B' SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT DISTINCT k2 FROM t WHERE k = 'B' ORDER BY k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+
+SELECT '-- aggregates that depend only on the distinct values of the columns before m';
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, uniqExact(k2), count(DISTINCT k2), min(k2), sum(DISTINCT k2), groupBitOr(k2) FROM t GROUP BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k, uniqExact(k2), count(DISTINCT k2), min(k2), sum(DISTINCT k2), groupBitOr(k2) FROM t GROUP BY k ORDER BY k SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k, uniqExact(k2), count(DISTINCT k2), min(k2), sum(DISTINCT k2), groupBitOr(k2) FROM t GROUP BY k ORDER BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, uniqExact(k2), max(m) FROM t GROUP BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k, uniqExact(k2), max(m) FROM t GROUP BY k ORDER BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+-- count(DISTINCT) without GROUP BY; the implicit projection over column statistics does not apply to it.
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT count(DISTINCT k) FROM t SETTINGS optimize_aggregation_max_by_sorting_key = 1, optimize_use_implicit_projections = 0));
+SELECT count(DISTINCT k) FROM t SETTINGS optimize_aggregation_max_by_sorting_key = 1, optimize_use_implicit_projections = 0;
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, groupBitXor(k2) FROM t GROUP BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT DISTINCT x FROM t SETTINGS optimize_aggregation_max_by_sorting_key = 1));
 
 SELECT '-- not applied: max of a column outside the sorting key';
 SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
