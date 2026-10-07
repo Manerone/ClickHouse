@@ -1,11 +1,13 @@
 #include <Processors/QueryPlan/Optimizations/Optimizations.h>
 
 #include <AggregateFunctions/IAggregateFunction.h>
+#include <DataTypes/IDataType.h>
 #include <Interpreters/ActionsDAG.h>
 #include <Processors/QueryPlan/AggregatingStep.h>
 #include <Processors/QueryPlan/ExpressionStep.h>
 #include <Processors/QueryPlan/ReadFromMergeTree.h>
 #include <Storages/MergeTree/IMergeTreeDataPart.h>
+#include <Storages/MergeTree/MergeTreeData.h>
 #include <Common/logger_useful.h>
 
 namespace DB::QueryPlanOptimizations
@@ -25,9 +27,28 @@ namespace DB::QueryPlanOptimizations
 /// `j + 1` all start with the same prefix. This condition implies the one for the maximum, so it also serves
 /// queries with both.
 ///
-/// Supported aggregates: `max(k)`, `argMax(x, k)`, `min(k)` and `argMin(x, k)`. Corner cases (filters,
-/// lightweight deletes, patch parts, FINAL, nullable or floating-point keys, reverse sorting keys, ...) are not
-/// handled yet.
+/// Supported aggregates: `max(k)`, `argMax(x, k)`, `min(k)` and `argMin(x, k)`.
+///
+/// The rule assumes that every row of the part reaches the aggregation and that the stored order is the order
+/// the aggregation uses. So it is not applied with filters, `FINAL`, sampling, reverse sorting keys or key types
+/// whose order or equality differ from the aggregation's, and parts with deleted rows, patch parts or
+/// on-the-fly mutations are read in full.
+
+/// The order and equality of the primary index must agree with the aggregation. `Nullable`: `max` and `min`
+/// ignore NULLs, which sort at an end of the run. Floating point: NaN has no consistent order, and `-0` and `+0`
+/// sort as equal but form different groups. `Variant`, `Dynamic` and `JSON` can hold such values at runtime.
+static bool isSupportedKeyType(const IDataType & type)
+{
+    return !type.isNullable() && !type.isLowCardinalityNullable() && !isFloat(type) && !isVariant(type)
+        && !isDynamic(type) && !isObject(type);
+}
+
+static bool isSupportedKeyTypeRecursive(const DataTypePtr & type)
+{
+    bool supported = isSupportedKeyType(*type);
+    type->forEachChild([&](const IDataType & child) { supported = supported && isSupportedKeyType(child); });
+    return supported;
+}
 
 /// Follows `name` from the output of the chain of expressions down to the reading step, through
 /// pass-through nodes (aliases of inputs) only.
@@ -86,6 +107,15 @@ static void tryApply(AggregatingStep & aggregating, QueryPlan::Node & aggregatin
     if (sorting_key.column_names.size() <= prefix_size || metadata->getPrimaryKey().column_names.size() < prefix_size)
         return;
 
+    /// The prefix columns and the next column must be sorted ascending, with types whose order the aggregation shares.
+    for (size_t i = 0; i <= prefix_size; ++i)
+    {
+        if (i < sorting_key.reverse_flags.size() && sorting_key.reverse_flags[i])
+            return;
+        if (!isSupportedKeyTypeRecursive(sorting_key.data_types[i]))
+            return;
+    }
+
     NameSet prefix(sorting_key.column_names.begin(), sorting_key.column_names.begin() + prefix_size);
     for (const auto & key : params.keys)
     {
@@ -123,6 +153,17 @@ static void tryApply(AggregatingStep & aggregating, QueryPlan::Node & aggregatin
         return;
 
     auto result = std::make_shared<ReadFromMergeTree::AnalysisResult>(*analysis);
+    const auto & mutations_snapshot = reading->getMutationsSnapshot();
+
+    /// Rows of such parts can be hidden or changed while reading, after the primary index was written:
+    /// lightweight deletes, patch parts (e.g. a `DELETE` in lightweight-update mode) and mutations applied on the fly.
+    auto may_hide_rows = [&](const MergeTreeData::DataPartPtr & data_part)
+    {
+        return data_part->hasLightweightDelete()
+            || (mutations_snapshot
+                && (!mutations_snapshot->getPatchesForPart(data_part).empty()
+                    || !mutations_snapshot->getOnFlyMutationCommandsForPart(data_part).empty()));
+    };
 
     size_t sum_marks = 0;
     size_t sum_ranges = 0;
@@ -131,7 +172,7 @@ static void tryApply(AggregatingStep & aggregating, QueryPlan::Node & aggregatin
     {
         const auto & data_part = part.data_part;
         auto index = data_part->getIndex();
-        if (index->size() >= prefix_size && !index->empty() && !data_part->hasLightweightDelete())
+        if (index->size() >= prefix_size && !index->empty() && !may_hide_rows(data_part))
         {
             const auto & columns = *index;
             const size_t index_rows = columns.front()->size();
