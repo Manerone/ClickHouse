@@ -43,9 +43,42 @@ FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SE
 SELECT k, max(k2) FROM t GROUP BY k ORDER BY k SETTINGS optimize_aggregation_max_by_sorting_key = 0;
 SELECT k, max(k2) FROM t GROUP BY k ORDER BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1;
 
-SELECT '-- not applied: max of a column that is not next in the sorting key';
+SELECT '-- GROUP BY keys that are only some of the columns before m: the last granule of each (k, k2) run';
+-- The runs of a group tie on max(m) and min(m), so argMax and argMin would pick any of them; they are not used here.
 SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
 FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, max(m) FROM t GROUP BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k, max(m) FROM t GROUP BY k ORDER BY k SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k, max(m) FROM t GROUP BY k ORDER BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k2, max(m), min(m) FROM t GROUP BY k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k2, max(m), min(m) FROM t GROUP BY k2 ORDER BY k2 SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k2, max(m), min(m) FROM t GROUP BY k2 ORDER BY k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+-- Without GROUP BY, the implicit projection over column statistics answers max(m) without reading granules,
+-- so it is disabled to exercise this optimization.
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT max(m) FROM t SETTINGS optimize_aggregation_max_by_sorting_key = 1, optimize_use_implicit_projections = 0));
+SELECT max(m), min(m) FROM t SETTINGS optimize_aggregation_max_by_sorting_key = 0, optimize_use_implicit_projections = 0;
+SELECT max(m), min(m) FROM t SETTINGS optimize_aggregation_max_by_sorting_key = 1, optimize_use_implicit_projections = 0;
+
+SELECT '-- WHERE fixes a leading column: GROUP BY k2 for one value of k';
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k2, max(m), argMax(x, m) FROM t WHERE k = 'B' GROUP BY k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k2, max(m), argMax(x, m) FROM t WHERE k = 'B' GROUP BY k2 ORDER BY k2 SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k2, max(m), argMax(x, m) FROM t WHERE k = 'B' GROUP BY k2 ORDER BY k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+
+SELECT '-- a GROUP BY expression of the columns before m';
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT lower(k) AS lk, max(m) FROM t GROUP BY lk SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT lower(k) AS lk, max(m) FROM t GROUP BY lk ORDER BY lk SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT lower(k) AS lk, max(m) FROM t GROUP BY lk ORDER BY lk SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+
+SELECT '-- not applied: a GROUP BY key that is not a function of the columns before m';
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT x % 2 AS p, max(m) FROM t GROUP BY p SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, max(k2) FROM t GROUP BY k, m SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+
+SELECT '-- not applied: max of a column outside the sorting key';
 SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
 FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, max(x) FROM t GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
 

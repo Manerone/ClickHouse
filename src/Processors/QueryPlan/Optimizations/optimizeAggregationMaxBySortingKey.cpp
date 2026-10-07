@@ -15,30 +15,35 @@
 namespace DB::QueryPlanOptimizations
 {
 
-/// PROTOTYPE: skip granules that cannot contain `max(k)` or `min(k)` for any group of `GROUP BY <keys>`,
-/// where `<keys>` (in any order) form a prefix of the sorting key and `k` is the next sorting key column.
+/// PROTOTYPE: skip granules that cannot contain `max(k)` or `min(k)` for any group of `GROUP BY <keys>`, where `k`
+/// is a sorting key column and every key depends only on the sorting key columns before `k` (the prefix).
 ///
-/// Within a part, rows are sorted by `(<keys>, k)`. The primary index stores the first row of every granule.
-/// If granules `j` and `j + 1` start with the same `<keys>` prefix, then every row of granule `j` has that
-/// prefix, and its `k` is not greater than `k` of the first row of granule `j + 1`. So granule `j` holds
-/// neither a new group nor the maximum of an existing one, and can be skipped.
+/// Within a part, rows are sorted by `(<prefix>, k)`, so each value of the prefix forms a run of rows sorted by `k`.
+/// The primary index stores the first row of every granule. If granules `j` and `j + 1` start with the same prefix,
+/// then every row of granule `j` belongs to that run, and its `k` is not greater than `k` of the first row of
+/// granule `j + 1`. So granule `j` holds neither the start of a new run nor the maximum of an existing one, and can
+/// be skipped. A group is a union of whole runs, because its keys are functions of the prefix, so the aggregation
+/// over the remaining rows still finds the maximum of every group: it is the largest maximum of its runs.
+/// For example, with `ORDER BY (exchange, symbol, ts)`, `GROUP BY exchange` with `max(ts)` keeps the last granule
+/// of every `(exchange, symbol)` run, and `WHERE exchange = 'X' GROUP BY symbol` keeps the last granule of every
+/// symbol of that exchange.
 ///
-/// For the minimum, granule `j` must also not hold the first row of its group. That is guaranteed when
-/// granule `j - 1` starts with the same prefix too, because then the group already started at or before the
+/// For the minimum, granule `j` must also not hold the first row of its run. That is guaranteed when
+/// granule `j - 1` starts with the same prefix too, because then the run already started at or before the
 /// first row of granule `j - 1`. So with `min`, granule `j` is skipped only when granules `j - 1`, `j` and
 /// `j + 1` all start with the same prefix. This condition implies the one for the maximum, so it also serves
 /// queries with both.
 ///
 /// Filters. The filter is split into conjuncts:
-/// - A conjunct that depends only on the `GROUP BY` columns removes whole groups, so it does not matter.
+/// - A conjunct that depends only on the prefix columns removes whole runs, so it does not matter.
 /// - The other conjuncts must be certainly true for the row that proves the granule unnecessary: the first row of
 ///   granule `j + 1` for the maximum, and the first row of granule `j - 1` for the minimum. These rows are
-///   real rows of the same group, and their `k` bounds every `k` in granule `j`; if they pass the filter, the
-///   group's answer is not in granule `j`. They are checked on the primary index with a `KeyCondition`, which
+///   real rows of the same run, and their `k` bounds every `k` in granule `j`; if they pass the filter, the
+///   run's answer is not in granule `j`. They are checked on the primary index with a `KeyCondition`, which
 ///   must be exact (not relaxed): a conjunct on a column outside the primary index, or on a function the
 ///   analysis does not know, disables the optimization.
 ///
-/// Supported aggregates: `max(k)`, `argMax(x, k)`, `min(k)` and `argMin(x, k)`.
+/// Supported aggregates: `max(k)`, `argMax(x, k)`, `min(k)` and `argMin(x, k)`, all on the same `k`.
 ///
 /// The rule assumes that every row of the part reaches the aggregation unless the filter removes it, and that
 /// the stored order is the order the aggregation uses. So it is not applied with `FINAL`, sampling, reverse
@@ -128,33 +133,11 @@ static void tryApply(AggregatingStep & aggregating, QueryPlan::Node & aggregatin
     const auto & metadata = reading->getStorageMetadata();
     const auto & sorting_key = metadata->getSortingKey();
     const auto & primary_key = metadata->getPrimaryKey();
-    const size_t prefix_size = params.keys.size();
 
-    if (sorting_key.column_names.size() <= prefix_size || primary_key.column_names.size() < prefix_size)
-        return;
-
-    /// The prefix columns and the next column must be sorted ascending, with types whose order the aggregation shares.
-    for (size_t i = 0; i <= prefix_size; ++i)
-    {
-        if (i < sorting_key.reverse_flags.size() && sorting_key.reverse_flags[i])
-            return;
-        if (!isSupportedKeyTypeRecursive(sorting_key.data_types[i]))
-            return;
-    }
-
-    const NameSet group_columns(sorting_key.column_names.begin(), sorting_key.column_names.begin() + prefix_size);
-    NameSet remaining_group_columns = group_columns;
-    for (const auto & key : params.keys)
-    {
-        auto column = mapToReadingColumn(query.dag, key);
-        if (!column || !remaining_group_columns.erase(*column))
-            return;
-    }
-
-    /// Whether some aggregate needs the last row of each group (`max`, `argMax`) or the first one (`min`, `argMin`).
+    /// Whether some aggregate needs the last row of each run (`max`, `argMax`) or the first one (`min`, `argMin`).
     bool need_group_end = false;
     bool need_group_start = false;
-    const String & next_column = sorting_key.column_names[prefix_size];
+    std::optional<String> aggregated_column;
     for (const auto & aggregate : params.aggregates)
     {
         const String name = aggregate.function->getName();
@@ -167,8 +150,9 @@ static void tryApply(AggregatingStep & aggregating, QueryPlan::Node & aggregatin
             return;
 
         auto column = mapToReadingColumn(query.dag, aggregate.argument_names[key_argument]);
-        if (!column || *column != next_column)
+        if (!column || (aggregated_column && *column != *aggregated_column))
             return;
+        aggregated_column = std::move(column);
 
         if (name == "min" || name == "argMin")
             need_group_start = true;
@@ -176,7 +160,40 @@ static void tryApply(AggregatingStep & aggregating, QueryPlan::Node & aggregatin
             need_group_end = true;
     }
 
-    /// Split the filter: conjuncts on the `GROUP BY` columns only remove whole groups; the other ones must hold for
+    /// The prefix is the sorting key columns before the aggregated one. They must be in the primary index.
+    const auto aggregated_position = std::find(sorting_key.column_names.begin(), sorting_key.column_names.end(), *aggregated_column);
+    if (aggregated_position == sorting_key.column_names.end())
+        return;
+    const size_t prefix_size = aggregated_position - sorting_key.column_names.begin();
+    if (primary_key.column_names.size() < prefix_size)
+        return;
+
+    /// The prefix columns and the aggregated column must be sorted ascending, with types whose order the aggregation shares.
+    for (size_t i = 0; i <= prefix_size; ++i)
+    {
+        if (i < sorting_key.reverse_flags.size() && sorting_key.reverse_flags[i])
+            return;
+        if (!isSupportedKeyTypeRecursive(sorting_key.data_types[i]))
+            return;
+    }
+
+    /// Every `GROUP BY` key must be a deterministic function of the prefix columns (usually one of them), so that each
+    /// group is a union of whole runs.
+    const NameSet prefix_columns(sorting_key.column_names.begin(), aggregated_position);
+    for (const auto & key : params.keys)
+    {
+        if (!query.dag)
+        {
+            if (!prefix_columns.contains(key))
+                return;
+            continue;
+        }
+        const auto * key_node = query.dag->tryFindInOutputs(key);
+        if (!key_node || !dependsOnlyOn(key_node, prefix_columns))
+            return;
+    }
+
+    /// Split the filter: conjuncts on the prefix columns only remove whole runs; the other ones must hold for
     /// the witness rows, which is checked with an exact `KeyCondition` on the primary index.
     ActionsDAG::NodeRawConstPtrs witness_conjuncts;
     if (query.filter_node)
@@ -185,7 +202,7 @@ static void tryApply(AggregatingStep & aggregating, QueryPlan::Node & aggregatin
         while (predicate->type == ActionsDAG::ActionType::ALIAS)
             predicate = predicate->children.front();
         for (const auto * conjunct : ActionsDAG::extractConjunctionAtoms(predicate))
-            if (!dependsOnlyOn(conjunct, group_columns))
+            if (!dependsOnlyOn(conjunct, prefix_columns))
                 witness_conjuncts.push_back(conjunct);
     }
 
