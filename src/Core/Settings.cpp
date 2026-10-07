@@ -4828,7 +4828,7 @@ When enabled and aggregation in order is active, pushes LIMIT into the aggregati
 )", 0, \
         {"26.7", false, true, "New setting to push the `LIMIT` into aggregation-in-order for early termination when the `ORDER BY` is a prefix of the `GROUP BY` sort description."}) \
     DECLARE(Bool, optimize_aggregation_max_by_sorting_key, false, R"(
-Prototype. For `GROUP BY <keys>` with only `max(k)` or `argMax(x, k)` aggregates, where `<keys>` form a prefix of the sorting key and `k` is the next sorting key column, skip granules that cannot contain the maximum of `k` for any group, using the primary index.
+Prototype. For `GROUP BY <keys>` with only `max(k)`, `argMax(x, k)`, `min(k)` or `argMin(x, k)` aggregates, where `<keys>` form a prefix of the sorting key and `k` is the next sorting key column, skip granules that cannot contain the maximum (or minimum) of `k` for any group, using the primary index.
 )", 0, \
         {"26.10", false, false, "New prototype setting."}) \
     DECLARE(Bool, enable_adaptive_aggregator, true, R"(

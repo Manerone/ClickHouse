@@ -11,7 +11,7 @@
 namespace DB::QueryPlanOptimizations
 {
 
-/// PROTOTYPE: skip granules that cannot contain `max(k)` for any group of `GROUP BY <keys>`,
+/// PROTOTYPE: skip granules that cannot contain `max(k)` or `min(k)` for any group of `GROUP BY <keys>`,
 /// where `<keys>` (in any order) form a prefix of the sorting key and `k` is the next sorting key column.
 ///
 /// Within a part, rows are sorted by `(<keys>, k)`. The primary index stores the first row of every granule.
@@ -19,8 +19,15 @@ namespace DB::QueryPlanOptimizations
 /// prefix, and its `k` is not greater than `k` of the first row of granule `j + 1`. So granule `j` holds
 /// neither a new group nor the maximum of an existing one, and can be skipped.
 ///
-/// Supported aggregates: `max(k)` and `argMax(x, k)`. Corner cases (filters, lightweight deletes, patch
-/// parts, FINAL, nullable or floating-point keys, reverse sorting keys, ...) are not handled yet.
+/// For the minimum, granule `j` must also not hold the first row of its group. That is guaranteed when
+/// granule `j - 1` starts with the same prefix too, because then the group already started at or before the
+/// first row of granule `j - 1`. So with `min`, granule `j` is skipped only when granules `j - 1`, `j` and
+/// `j + 1` all start with the same prefix. This condition implies the one for the maximum, so it also serves
+/// queries with both.
+///
+/// Supported aggregates: `max(k)`, `argMax(x, k)`, `min(k)` and `argMin(x, k)`. Corner cases (filters,
+/// lightweight deletes, patch parts, FINAL, nullable or floating-point keys, reverse sorting keys, ...) are not
+/// handled yet.
 
 /// Follows `name` from the output of the chain of expressions down to the reading step, through
 /// pass-through nodes (aliases of inputs) only.
@@ -87,21 +94,26 @@ static void tryApply(AggregatingStep & aggregating, QueryPlan::Node & aggregatin
             return;
     }
 
-    const String & max_column = sorting_key.column_names[prefix_size];
+    /// Whether some aggregate needs the first row of each group (`min`, `argMin`), not only the last one.
+    bool need_group_start = false;
+    const String & next_column = sorting_key.column_names[prefix_size];
     for (const auto & aggregate : params.aggregates)
     {
         const String name = aggregate.function->getName();
-        size_t max_argument = 0;
-        if (name == "max" && aggregate.argument_names.size() == 1)
-            max_argument = 0;
-        else if (name == "argMax" && aggregate.argument_names.size() == 2)
-            max_argument = 1;
+        size_t key_argument = 0;
+        if ((name == "max" || name == "min") && aggregate.argument_names.size() == 1)
+            key_argument = 0;
+        else if ((name == "argMax" || name == "argMin") && aggregate.argument_names.size() == 2)
+            key_argument = 1;
         else
             return;
 
-        auto column = mapToReadingColumn(aggregate.argument_names[max_argument], expressions);
-        if (!column || *column != max_column)
+        auto column = mapToReadingColumn(aggregate.argument_names[key_argument], expressions);
+        if (!column || *column != next_column)
             return;
+
+        if (name == "min" || name == "argMin")
+            need_group_start = true;
     }
 
     auto analysis = reading->getAnalyzedResult();
@@ -139,6 +151,8 @@ static void tryApply(AggregatingStep & aggregating, QueryPlan::Node & aggregatin
                 for (size_t mark = range.begin; mark < range.end; ++mark)
                 {
                     bool keep = mark + 1 >= num_granules || mark + 1 >= index_rows || !same_prefix(mark, mark + 1);
+                    if (need_group_start)
+                        keep = keep || mark == 0 || !same_prefix(mark - 1, mark);
                     if (!keep)
                         continue;
                     if (!new_ranges.empty() && new_ranges.back().end == mark)
@@ -166,7 +180,9 @@ static void tryApply(AggregatingStep & aggregating, QueryPlan::Node & aggregatin
     result->selected_rows = sum_rows;
     result->index_stats.emplace_back(ReadFromMergeTree::IndexStat{
         .type = ReadFromMergeTree::IndexType::MaxBySortingKey,
-        .description = "Skip granules that cannot contain the maximum of the next sorting key column",
+        .description = need_group_start
+            ? "Skip granules that cannot contain the minimum or maximum of the next sorting key column"
+            : "Skip granules that cannot contain the maximum of the next sorting key column",
         .num_parts_after = result->selected_parts,
         .num_granules_after = sum_marks});
 
