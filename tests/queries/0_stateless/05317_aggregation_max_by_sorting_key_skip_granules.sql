@@ -53,10 +53,47 @@ SELECT '-- not applied: an aggregate that needs every row';
 SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
 FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, max(m), count() FROM t GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
 
-SELECT '-- not applied: a filter';
+SELECT '-- not applied: a filter on a column outside the primary key';
 SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
 FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, max(m) FROM t WHERE x > 980 GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
 SELECT k, k2, max(m) FROM t WHERE x > 980 GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, max(m) FROM t WHERE m < 10 OR x > 990 GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k, k2, max(m) FROM t WHERE m < 10 OR x > 990 GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+
+SELECT '-- not applied: a filter the primary key analysis cannot evaluate exactly';
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, max(m) FROM t WHERE m IN (3, 7) GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+
+SELECT '-- filters on GROUP BY columns only remove whole groups';
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, max(m) FROM t WHERE k = 'A' GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k, k2, max(m) FROM t WHERE k = 'A' GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, max(m) FROM t WHERE lower(k) = 'b' AND k2 IN (0, 1) GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k, k2, max(m) FROM t WHERE lower(k) = 'b' AND k2 IN (0, 1) GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+
+SELECT '-- filters on m: a granule is skipped only if the first row of the next granule passes the filter';
+-- m < 10: the next granule of the one with m 5-8 starts with m = 9, which passes: only the last granule is read.
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, max(m), argMax(x, m) FROM t WHERE m < 10 GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k, k2, max(m), argMax(x, m) FROM t WHERE m < 10 GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k, k2, max(m), argMax(x, m) FROM t WHERE m < 10 GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+-- m < 9: m = 9 fails, so the granule with m 5-8, which holds the answer, is read.
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, max(m), argMax(x, m) FROM t WHERE m < 9 GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k, k2, max(m), argMax(x, m) FROM t WHERE m < 9 GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k, k2, max(m), argMax(x, m) FROM t WHERE m < 9 GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+-- min: the first row of the previous granule must pass the filter.
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, min(m), max(m) FROM t WHERE m BETWEEN 3 AND 10 GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k, k2, min(m), max(m) FROM t WHERE m BETWEEN 3 AND 10 GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k, k2, min(m), max(m) FROM t WHERE m BETWEEN 3 AND 10 GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+-- A conjunct on GROUP BY columns and one on m, as PREWHERE.
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, max(m) FROM t PREWHERE k = 'B' AND m <= 10 GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k, k2, max(m) FROM t PREWHERE k = 'B' AND m <= 10 GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k, k2, max(m) FROM t PREWHERE k = 'B' AND m <= 10 GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
 
 SELECT '-- every part is filtered on its own';
 DROP TABLE IF EXISTS t_parts;

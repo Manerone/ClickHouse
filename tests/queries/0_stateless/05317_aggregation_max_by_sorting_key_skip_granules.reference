@@ -49,10 +49,57 @@ not applied
 not applied
 -- not applied: an aggregate that needs every row
 not applied
--- not applied: a filter
+-- not applied: a filter on a column outside the primary key
 not applied
 A	0	12
 A	1	8
+not applied
+A	0	10
+A	1	9
+B	0	9
+B	1	9
+-- not applied: a filter the primary key analysis cannot evaluate exactly
+not applied
+-- filters on GROUP BY columns only remove whole groups
+Granules: 2/6
+A	0	12
+A	1	12
+Granules: 4/12
+B	0	12
+B	1	12
+-- filters on m: a granule is skipped only if the first row of the next granule passes the filter
+Granules: 4/12
+A	0	9	992
+A	1	9	980
+B	0	9	968
+B	1	9	956
+A	0	9	992
+A	1	9	980
+B	0	9	968
+B	1	9	956
+Granules: 7/11
+A	0	8	993
+A	1	8	981
+B	0	8	969
+B	1	8	957
+A	0	8	993
+A	1	8	981
+B	0	8	969
+B	1	8	957
+Granules: 12/12
+A	0	3	10
+A	1	3	10
+B	0	3	10
+B	1	3	10
+A	0	3	10
+A	1	3	10
+B	0	3	10
+B	1	3	10
+Granules: 3/7
+B	0	10
+B	1	10
+B	0	10
+B	1	10
 -- every part is filtered on its own
 Granules: 4/6
 A	112	1
