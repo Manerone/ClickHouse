@@ -6,6 +6,9 @@
 #include <Interpreters/ActionsDAG.h>
 #include <Processors/QueryPlan/AggregatingStep.h>
 #include <Processors/QueryPlan/DistinctStep.h>
+#include <Processors/QueryPlan/ExpressionStep.h>
+#include <Processors/QueryPlan/LimitByStep.h>
+#include <Processors/QueryPlan/SortingStep.h>
 #include <Processors/QueryPlan/Optimizations/projectionsCommon.h>
 #include <Processors/QueryPlan/ReadFromMergeTree.h>
 #include <Storages/MergeTree/IMergeTreeDataPart.h>
@@ -51,6 +54,9 @@ namespace DB::QueryPlanOptimizations
 /// Without `max(k)`-like aggregates (`GROUP BY` with only such aggregates or none, and `DISTINCT`), the prefix is the
 /// shortest sorting key prefix that covers the keys and arguments, and the last granule of each run is kept, as for
 /// `max`: then every run is present.
+///
+/// `ORDER BY <keys>, k DESC LIMIT n BY <keys>` needs the last `n` rows of each run (the first `n` with `ASC`), plus the
+/// offset: granule `j` is skipped when at least that many rows of its run are known to follow it (or precede it).
 ///
 /// The rule assumes that every row of the part reaches the aggregation unless the filter removes it, and that
 /// the stored order is the order the aggregation uses. So it is not applied with `FINAL`, sampling, reverse
@@ -158,8 +164,20 @@ static bool outputDependsOnlyOn(const std::optional<ActionsDAG> & dag, const Str
     return output && dependsOnlyOn(output, columns);
 }
 
-/// `input_node` is the input of an aggregation (`keys`, `aggregates`) or of a `DISTINCT` (`keys`, no aggregates).
-static void tryApply(QueryPlan::Node & input_node, const Names & keys, const AggregateDescriptions & aggregates)
+/// For `ORDER BY <keys>, k [DESC] LIMIT n BY <keys>`: the column `k` (a name in the output of the input node), whether
+/// it is sorted descending (then the last rows of each run are needed) or ascending (the first rows), and the number
+/// of rows needed per group (`n` plus the offset).
+struct LimitByOrder
+{
+    String column;
+    bool descending = false;
+    size_t rows = 0;
+};
+
+/// `input_node` is the input of an aggregation (`keys`, `aggregates`), of a `DISTINCT` (`keys`, no aggregates), or of
+/// the sorting below a `LIMIT BY` (`keys`, no aggregates, `limit_by`).
+static void tryApply(
+    QueryPlan::Node & input_node, const Names & keys, const AggregateDescriptions & aggregates, const std::optional<LimitByOrder> & limit_by = {})
 {
     /// The expressions and filters between the aggregation and the reading step: only `ExpressionStep` and
     /// `FilterStep`, plus `PREWHERE` and row policies of the reading step.
@@ -210,6 +228,18 @@ static void tryApply(QueryPlan::Node & input_node, const Names & keys, const Agg
         if (auto position = sorting_key_position(order_column(aggregate)))
             aggregated_position = std::max(aggregated_position.value_or(0), *position);
 
+    /// For `LIMIT BY`, the column of the `ORDER BY` after the keys plays the role of the aggregated column.
+    if (limit_by)
+    {
+        aggregated_position = sorting_key_position(mapToReadingColumn(query.dag, limit_by->column));
+        if (!aggregated_position)
+            return;
+        const NameSet columns_before(sorting_key.column_names.begin(), sorting_key.column_names.begin() + *aggregated_position);
+        for (const auto & key : keys)
+            if (!outputDependsOnlyOn(query.dag, key, columns_before))
+                return;
+    }
+
     /// If a key or the argument of another aggregate needs that column or a later one (e.g. `min(k2)` with
     /// `uniqExact(k2)`), there is no aggregated column: `min` and `max` then also depend only on the runs that are
     /// present, with a longer prefix. `argMin` and `argMax` need the aggregated column.
@@ -237,8 +267,10 @@ static void tryApply(QueryPlan::Node & input_node, const Names & keys, const Agg
 
     /// Whether the last row of each run (`max`, `argMax`) or the first one (`min`, `argMin`) is needed. Without
     /// them, only the presence of every run matters, which keeping the last granule of each run guarantees.
-    bool need_group_end = false;
-    bool need_group_start = false;
+    bool need_group_end = limit_by && limit_by->descending;
+    bool need_group_start = limit_by && !limit_by->descending;
+    /// How many of the last (or first) rows of each run must be read: more than one only for `LIMIT n BY`.
+    const size_t rows_needed = limit_by ? limit_by->rows : 1;
     Names set_arguments;
     for (const auto & aggregate : aggregates)
     {
@@ -395,16 +427,55 @@ static void tryApply(QueryPlan::Node & input_node, const Names & keys, const Agg
                 return !witness_condition->checkInHyperrectangle(point, primary_key.data_types).can_be_false;
             };
 
+            /// The rows of granule `granule` of the current run that certainly pass the filter: with a filter, only its
+            /// first row is known; without one, all its rows if the granule lies entirely in the run.
+            auto known_rows = [&](size_t granule, bool whole_granule) -> size_t
+            {
+                if (witness_condition)
+                    return witness_passes(granule) ? 1 : 0;
+                return whole_granule ? data_part->index_granularity->getMarkRows(granule) : 1;
+            };
+
+            /// Whether at least `rows_needed` such rows of the run of granule `mark` follow it. Every one of them has
+            /// a value of the aggregated column not smaller than any in granule `mark`.
+            auto enough_rows_after = [&](size_t mark)
+            {
+                size_t rows = 0;
+                for (size_t granule = mark + 1; granule < num_granules && granule < index_rows && same_prefix(mark, granule); ++granule)
+                {
+                    bool whole_granule = granule + 1 < num_granules && granule + 1 < index_rows && same_prefix(mark, granule + 1);
+                    rows += known_rows(granule, whole_granule);
+                    if (rows >= rows_needed)
+                        return true;
+                }
+                return false;
+            };
+
+            /// Whether at least `rows_needed` such rows of the run of granule `mark` precede it. A granule before `mark`
+            /// that starts with the same prefix lies entirely in the run, because the next one does too.
+            auto enough_rows_before = [&](size_t mark)
+            {
+                size_t rows = 0;
+                for (size_t granule = mark; granule > 0 && same_prefix(granule - 1, mark); --granule)
+                {
+                    rows += known_rows(granule - 1, /*whole_granule=*/ true);
+                    if (rows >= rows_needed)
+                        return true;
+                }
+                return false;
+            };
+
             MarkRanges new_ranges;
             for (const auto & range : part.ranges)
             {
                 for (size_t mark = range.begin; mark < range.end; ++mark)
                 {
+                    /// Granule `mark` must lie entirely in one run: the next granule starts with the same prefix.
                     bool can_skip = mark + 1 < num_granules && mark + 1 < index_rows && same_prefix(mark, mark + 1);
                     if (can_skip && need_group_end)
-                        can_skip = witness_passes(mark + 1);
+                        can_skip = enough_rows_after(mark);
                     if (can_skip && need_group_start)
-                        can_skip = mark > 0 && same_prefix(mark - 1, mark) && witness_passes(mark - 1);
+                        can_skip = enough_rows_before(mark);
                     if (can_skip)
                         continue;
                     if (!new_ranges.empty() && new_ranges.back().end == mark)
@@ -432,13 +503,70 @@ static void tryApply(QueryPlan::Node & input_node, const Names & keys, const Agg
     result->selected_rows = sum_rows;
     result->index_stats.emplace_back(ReadFromMergeTree::IndexStat{
         .type = ReadFromMergeTree::IndexType::MaxBySortingKey,
-        .description = !aggregated_position ? "Skip granules whose groups are all present in later granules"
+        .description = limit_by             ? "Skip granules that cannot contain the first rows of LIMIT BY"
+            : !aggregated_position          ? "Skip granules whose groups are all present in later granules"
             : need_group_start              ? "Skip granules that cannot contain the minimum or maximum of the aggregated sorting key column"
                                             : "Skip granules that cannot contain the maximum of the aggregated sorting key column",
         .num_parts_after = result->selected_parts,
         .num_granules_after = sum_marks});
 
     reading->setAnalyzedResult(std::move(result));
+}
+
+/// `ORDER BY <keys>, k [DESC] LIMIT n BY <keys>`: `LimitByStep`, expressions, `SortingStep`. The `ORDER BY` must be
+/// some of the `LIMIT BY` columns, then one more column, and nothing after it: a tie-breaker could prefer a row with
+/// the same value of `k` in a skipped granule.
+static void tryApplyToLimitBy(const LimitByStep & limit_by, QueryPlan::Node & limit_by_node)
+{
+    std::vector<const ExpressionStep *> expressions;
+    QueryPlan::Node * node = limit_by_node.children.front();
+    while (const auto * expression = typeid_cast<const ExpressionStep *>(node->step.get()))
+    {
+        if (node->children.size() != 1)
+            return;
+        expressions.push_back(expression);
+        node = node->children.front();
+    }
+
+    const auto * sorting = typeid_cast<const SortingStep *>(node->step.get());
+    if (!sorting || node->children.size() != 1)
+        return;
+
+    /// The `LIMIT BY` columns, as names of the sorting's output, through aliases only.
+    Names keys;
+    for (String name : limit_by.getColumns())
+    {
+        for (const auto * expression : expressions)
+        {
+            const auto * output = expression->getExpression().tryFindInOutputs(name);
+            if (!output)
+                return;
+            while (output->type == ActionsDAG::ActionType::ALIAS)
+                output = output->children.front();
+            if (output->type != ActionsDAG::ActionType::INPUT)
+                return;
+            name = output->result_name;
+        }
+        keys.push_back(std::move(name));
+    }
+
+    const auto & description = sorting->getSortDescription();
+    if (description.empty())
+        return;
+    const NameSet key_set(keys.begin(), keys.end());
+    for (size_t i = 0; i + 1 < description.size(); ++i)
+        if (!key_set.contains(description[i].column_name))
+            return;
+
+    const auto & last = description.back();
+    if (last.collator || key_set.contains(last.column_name))
+        return;
+
+    const size_t rows = limit_by.getGroupLength() + limit_by.getGroupOffset();
+    if (rows == 0)
+        return;
+
+    tryApply(*node->children.front(), keys, {}, LimitByOrder{.column = last.column_name, .descending = last.direction < 0, .rows = rows});
 }
 
 void optimizeAggregationMaxBySortingKey(QueryPlan::Node & root)
@@ -473,6 +601,10 @@ void optimizeAggregationMaxBySortingKey(QueryPlan::Node & root)
             /// The lowest `DISTINCT` above the reading step: a final `DISTINCT` above a preliminary one has a
             /// `DistinctStep` below it, so `QueryDAG` rejects it.
             tryApply(*node->children.front(), distinct->getColumnNames(), {});
+        }
+        else if (const auto * limit_by = typeid_cast<const LimitByStep *>(node->step.get()))
+        {
+            tryApplyToLimitBy(*limit_by, *node);
         }
     }
 }

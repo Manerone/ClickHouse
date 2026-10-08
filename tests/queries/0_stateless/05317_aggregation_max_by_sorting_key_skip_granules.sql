@@ -156,6 +156,30 @@ FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SE
 SELECT k, k2, max(m) FROM t PREWHERE k = 'B' AND m <= 10 GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 0;
 SELECT k, k2, max(m) FROM t PREWHERE k = 'B' AND m <= 10 GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
 
+SELECT '-- ORDER BY ... LIMIT n BY: the last n rows (DESC) or the first n rows (ASC) of each run';
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, m, x FROM t ORDER BY k, k2, m DESC LIMIT 1 BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k, k2, m, x FROM t ORDER BY k, k2, m DESC LIMIT 1 BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+-- The last granule of a run may hold rows of the next run, so it proves only one row of its run: LIMIT 2 also keeps the
+-- granule before it.
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, m, x FROM t ORDER BY k, k2, m DESC LIMIT 1 OFFSET 1 BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k, k2, m, x FROM t ORDER BY k, k2, m DESC LIMIT 1 OFFSET 1 BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k, k2, m, x FROM t ORDER BY k, k2, m DESC LIMIT 1 OFFSET 1 BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, m, x FROM t ORDER BY k, k2, m LIMIT 3 BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k, k2, m, x FROM t ORDER BY k, k2, m LIMIT 3 BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k, k2, m, x FROM t ORDER BY k, k2, m LIMIT 3 BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k2, m, x FROM t WHERE k = 'B' AND m < 10 ORDER BY k2, m DESC LIMIT 1 BY k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT k2, m, x FROM t WHERE k = 'B' AND m < 10 ORDER BY k2, m DESC LIMIT 1 BY k2 SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k2, m, x FROM t WHERE k = 'B' AND m < 10 ORDER BY k2, m DESC LIMIT 1 BY k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1;
+-- Not applied: a tie-breaker after m could prefer a row of a skipped granule.
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, m, x FROM t ORDER BY k, k2, m DESC, x LIMIT 1 BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, x FROM t ORDER BY k, x DESC LIMIT 1 BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1));
+
 SELECT '-- every part is filtered on its own';
 DROP TABLE IF EXISTS t_parts;
 CREATE TABLE t_parts (k String, m UInt32) ENGINE = MergeTree ORDER BY (k, m) SETTINGS index_granularity = 4, index_granularity_bytes = '10Mi';

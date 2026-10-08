@@ -153,6 +153,53 @@ B	0	10
 B	1	10
 B	0	10
 B	1	10
+-- ORDER BY ... LIMIT n BY: the last n rows (DESC) or the first n rows (ASC) of each run
+Granules: 4/12
+A	0	12	989
+A	1	12	977
+B	0	12	965
+B	1	12	953
+Granules: 8/12
+A	0	11	990
+A	1	11	978
+B	0	11	966
+B	1	11	954
+A	0	11	990
+A	1	11	978
+B	0	11	966
+B	1	11	954
+Granules: 8/12
+A	0	1	1000
+A	0	2	999
+A	0	3	998
+A	1	1	988
+A	1	2	987
+A	1	3	986
+B	0	1	976
+B	0	2	975
+B	0	3	974
+B	1	1	964
+B	1	2	963
+B	1	3	962
+A	0	1	1000
+A	0	2	999
+A	0	3	998
+A	1	1	988
+A	1	2	987
+A	1	3	986
+B	0	1	976
+B	0	2	975
+B	0	3	974
+B	1	1	964
+B	1	2	963
+B	1	3	962
+Granules: 3/7
+0	9	968
+1	9	956
+0	9	968
+1	9	956
+not applied
+not applied
 -- every part is filtered on its own
 Granules: 4/6
 A	112	1
