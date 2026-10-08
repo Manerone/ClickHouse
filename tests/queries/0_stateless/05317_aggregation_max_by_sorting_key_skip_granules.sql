@@ -217,14 +217,14 @@ SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey')
 FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, max(m) FROM t_float GROUP BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1));
 SELECT k, max(m) FROM t_float GROUP BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1;
 
-SELECT '-- not applied: floating-point prefix (-0 and +0 sort as equal but are different groups)';
+SELECT '-- not applied: floating-point prefix (-0 and +0 sort as equal but may be different groups)';
+-- Only the plan is checked: whether -0 and +0 form one group is decided by the grouping, not by this optimization
+-- (it differs between hash grouping and aggregation in order, see 04312_in_order_aggregation_inconsistency).
 DROP TABLE IF EXISTS t_float_prefix;
 CREATE TABLE t_float_prefix (k Float64, m UInt32) ENGINE = MergeTree ORDER BY (k, m) SETTINGS index_granularity = 4, index_granularity_bytes = '10Mi';
 INSERT INTO t_float_prefix SELECT if(number < 6, -0., 0.), number FROM numbers(12);
 SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
 FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, max(m) FROM t_float_prefix GROUP BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1));
--- Aggregation in order merges -0 and +0 into one group regardless of this optimization, so it is disabled here.
-SELECT toString(k), max(m) AS mx FROM t_float_prefix GROUP BY k ORDER BY mx SETTINGS optimize_aggregation_max_by_sorting_key = 1, optimize_aggregation_in_order = 0;
 
 SELECT '-- not applied: an expression in the sorting key';
 DROP TABLE IF EXISTS t_expression;
