@@ -33,8 +33,12 @@ SELECT count() FROM t_plan_hash WHERE a IN (1, 2, 3, 4, 5, 6) SETTINGS log_comme
 SELECT count() FROM t_plan_hash WHERE s = 'x' SETTINGS log_comment = 'same_string_1' FORMAT Null;
 SELECT count() FROM t_plan_hash WHERE s = 'a longer string' SETTINGS log_comment = 'same_string_2' FORMAT Null;
 
-SELECT a FROM t_plan_hash ORDER BY a LIMIT 3 SETTINGS log_comment = 'same_limit_1' FORMAT Null;
-SELECT a FROM t_plan_hash ORDER BY a LIMIT 30 OFFSET 5 SETTINGS log_comment = 'same_limit_2' FORMAT Null;
+-- Without a cap on the limit, both qualify for the same top-K optimizations. With one, a limit below
+-- it gets a `__topKFilter` the other does not, which is a different plan.
+SELECT a FROM t_plan_hash ORDER BY a LIMIT 3
+SETTINGS query_plan_max_limit_for_top_k_optimization = 0, log_comment = 'same_limit_1' FORMAT Null;
+SELECT a FROM t_plan_hash ORDER BY a LIMIT 30 OFFSET 5
+SETTINGS query_plan_max_limit_for_top_k_optimization = 0, log_comment = 'same_limit_2' FORMAT Null;
 
 -- Parameters of an aggregate function are literals.
 SELECT quantile(0.5)(a) FROM t_plan_hash SETTINGS log_comment = 'same_parameter_1' FORMAT Null;
