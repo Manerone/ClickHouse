@@ -47,6 +47,7 @@ ExplainPlanOptions planExplainOptions()
     {
         .actions = true,
         .indexes = true,
+        .projections = true,
         .compact = true,
         .pretty = true,
     };
@@ -67,34 +68,6 @@ String toJSONString(JSONBuilder::ItemPtr item)
     return result;
 }
 
-}
-
-QueryPlan & QueryPlanProfiler::captureQueryPlan(QueryPlan plan_, QueryPlanShapeHashes shape_hashes_)
-{
-    /// One plan per query, given before anything else is asked of the profiler.
-    chassert(!running.query_plan);
-    chassert(!finished);
-
-    running.query_plan.emplace(std::move(plan_));
-
-    /// Reads the ActionsDAGs, which building the pipeline moves out of the steps.
-    running.pretty_names.emplace(
-        QueryPlanFormat::buildPrettyNamesPerPlan(*running.query_plan, /*only_built_child_plans=*/ true)
-    );
-    running.shape_hashes.emplace(std::move(shape_hashes_));
-    return *running.query_plan;
-}
-
-void QueryPlanProfiler::declineCapture(const ContextPtr & context, const char * reason)
-{
-    if (!context->getSettingsRef()[Setting::log_query_plans])
-        return;
-
-    LOG_TRACE(
-        getLogger("QueryPlanProfiler"),
-        "Not storing the query plan in 'system.query_log' even though setting `log_query_plans`"
-        " is true, because {}.",
-        reason);
 }
 
 bool QueryPlanProfiler::canEnableProfiler(const ContextPtr & context, const ASTPtr & ast, bool internal)
@@ -136,6 +109,44 @@ bool QueryPlanProfiler::canEnableProfiler(const ContextPtr & context, const ASTP
     return true;
 }
 
+void QueryPlanProfiler::declineCapture(const ContextPtr & context, const char * reason)
+{
+    if (!context->getSettingsRef()[Setting::log_query_plans])
+        return;
+
+    LOG_TRACE(
+        getLogger("QueryPlanProfiler"),
+        "Not storing the query plan in 'system.query_log' even though setting `log_query_plans`"
+        " is true, because {}.",
+        reason);
+}
+
+QueryPlan & QueryPlanProfiler::captureQueryPlan(QueryPlan plan_, QueryPlanShapeHashes shape_hashes_)
+{
+    /// One plan per query, given before anything else is asked of the profiler.
+    chassert(!running.query_plan);
+    chassert(!finished);
+
+    running.query_plan.emplace(std::move(plan_));
+
+    /// Reads the ActionsDAGs, which building the pipeline moves out of the steps.
+    running.pretty_names.emplace(
+        QueryPlanFormat::buildPrettyNamesPerPlan(*running.query_plan, /*only_built_child_plans=*/ true)
+    );
+    running.shape_hashes.emplace(std::move(shape_hashes_));
+    return *running.query_plan;
+}
+
+void QueryPlanProfiler::captureStatistics(QueryPipeline & pipeline)
+{
+    /// Otherwise there is nothing for the statistics to be about, and the pipeline that produced
+    /// them was built from a plan this profiler never saw.
+    chassert(running.query_plan);
+    chassert(!finished);
+
+    capture(&pipeline);
+}
+
 void QueryPlanProfiler::instrumentPipeline(QueryPipeline & pipeline)
 {
     if (!running.query_plan || !running.query_plan->isInitialized())
@@ -147,16 +158,6 @@ void QueryPlanProfiler::instrumentPipeline(QueryPipeline & pipeline)
     running.step_profiler = std::make_shared<StepProfiler>(
         *running.query_plan, /*collect_work_intervals_=*/ false, /*only_built_child_plans=*/ true);
     pipeline.setStepProfiler(running.step_profiler);
-}
-
-void QueryPlanProfiler::captureStatistics(QueryPipeline & pipeline)
-{
-    /// Otherwise there is nothing for the statistics to be about, and the pipeline that produced
-    /// them was built from a plan this profiler never saw.
-    chassert(running.query_plan);
-    chassert(!finished);
-
-    capture(&pipeline);
 }
 
 void QueryPlanProfiler::finish()

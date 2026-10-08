@@ -36,7 +36,7 @@ namespace
 
 /// Check if any step in the query plan tree contains correlated expressions (PLACEHOLDER nodes).
 /// Such plans cannot be executed standalone — they require decorrelation first.
-/// We must traverse both `node->children` and any nested plans returned by `step->getChildPlans()`
+/// We must traverse both `node->children` and any nested plans returned by `step->getChildPlans`
 /// (e.g. `ReadFromMerge`), otherwise correlated `PLACEHOLDER` actions inside a child plan can be
 /// missed and we may attempt standalone execution and hit `Trying to execute PLACEHOLDER action`.
 bool hasCorrelatedExpressions(QueryPlan::Node * node)
@@ -51,7 +51,7 @@ bool hasCorrelatedExpressions(QueryPlan::Node * node)
         if (hasCorrelatedExpressions(child))
             return true;
 
-    for (auto * child_plan : node->step->getChildPlans())
+    for (auto * child_plan : node->step->getChildPlans(/*for_explain=*/ false))
         if (child_plan && hasCorrelatedExpressions(child_plan->getRootNode()))
             return true;
 

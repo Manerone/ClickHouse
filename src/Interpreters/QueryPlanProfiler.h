@@ -27,6 +27,8 @@ public:
     /// Reports why a query that asked for its plan is not going to get one.
     static void declineCapture(const ContextPtr & context, const char * reason);
 
+    size_t getMaxDescriptionLength() const { return max_description_length; }
+
     /// Records the plan the query is about to run, taking ownership of it and handing back
     /// a reference. `shape_hashes` must have been computed from that plan.
     QueryPlan & captureQueryPlan(QueryPlan plan_, QueryPlanShapeHashes shape_hashes_);
@@ -35,6 +37,10 @@ public:
     /// the statistics out of it.
     void captureStatistics(QueryPipeline & pipeline);
 
+    /// Attaches a StepProfiler to the pipeline, otherwise the processors would report
+    /// 0.00 ns as executed time.
+    void instrumentPipeline(QueryPipeline & pipeline);
+
     /// Ends profiling, drops every object kept while the query was being executed,
     /// and keeps only objects about the execution and query structure. Idempotent: a query that
     /// failed before its pipeline did finishes at logging time instead.
@@ -42,12 +48,6 @@ public:
 
     /// Renders the plan as JSON.
     String render();
-
-    size_t getMaxDescriptionLength() const { return max_description_length; }
-
-    /// Attaches a StepProfiler to the pipeline, otherwise the processors would report
-    /// 0.00 ns as executed time.
-    void instrumentPipeline(QueryPipeline & pipeline);
 
 private:
     /// The body shared by `captureStatistics` and `finish`: the pipeline is what the statistics

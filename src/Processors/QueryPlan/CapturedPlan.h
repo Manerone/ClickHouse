@@ -27,13 +27,15 @@ struct CapturedStep
     String description;
     std::vector<String> details;
 
-    /// Ids of this step's children, and of the roots of any plans it owns (`getChildPlans`).
+    /// Ids of this step's children, and of the roots of any plans it has already built
+    /// (`getBuiltChildPlans`).
     std::vector<String> children;
 
     std::optional<AnalyzedStepData> statistics;
 
-    /// What index analysis decided. Only a `ReadFromMergeTree` has any.
+    /// What index and projection analysis decided. Only a `ReadFromMergeTree` has any.
     PlanIndexStats indexes;
+    PlanProjectionStats projections;
 
     /// Hash of the shape of the subtree under this step, see `hashQueryPlanShape`. Absent for a step
     /// that did not exist yet when the plan was hashed, such as one in a child plan built while the
