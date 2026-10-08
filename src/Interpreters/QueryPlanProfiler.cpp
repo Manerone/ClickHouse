@@ -69,7 +69,7 @@ String toJSONString(JSONBuilder::ItemPtr item)
 
 }
 
-QueryPlan & QueryPlanProfiler::captureQueryPlan(QueryPlan plan_)
+QueryPlan & QueryPlanProfiler::captureQueryPlan(QueryPlan plan_, QueryPlanShapeHashes shape_hashes_)
 {
     /// One plan per query, given before anything else is asked of the profiler.
     chassert(!running.query_plan);
@@ -81,6 +81,7 @@ QueryPlan & QueryPlanProfiler::captureQueryPlan(QueryPlan plan_)
     running.pretty_names.emplace(
         QueryPlanFormat::buildPrettyNamesPerPlan(*running.query_plan, /*only_built_child_plans=*/ true)
     );
+    running.shape_hashes.emplace(std::move(shape_hashes_));
     return *running.query_plan;
 }
 
@@ -197,7 +198,8 @@ void QueryPlanProfiler::capture(QueryPipeline * pipeline)
             planExplainOptions(),
             max_description_length,
             stats ? &*stats : nullptr,
-            running.pretty_names ? &*running.pretty_names : nullptr);
+            running.pretty_names ? &*running.pretty_names : nullptr,
+            running.shape_hashes ? &*running.shape_hashes : nullptr);
 
         captured = std::move(result);
     }

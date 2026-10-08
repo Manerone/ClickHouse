@@ -85,6 +85,10 @@ public:
 
     void setPlanProfiler(QueryPlanProfilerPtr profiler) override { plan_profiler = std::move(profiler); }
 
+    void enableQueryPlanHash() override { query_plan_hash_enabled = true; }
+
+    UInt64 getQueryPlanHash() const override { return query_plan_hash; }
+
     bool supportsTransactions() const override { return true; }
 
     bool ignoreLimits() const override { return select_query_options.ignore_limits; }
@@ -109,6 +113,9 @@ private:
     QueryTreeNodePtr query_tree;
     Planner planner;
     QueryPlanProfilerPtr plan_profiler;
+
+    bool query_plan_hash_enabled = false;
+    UInt64 query_plan_hash = 0;
 
     std::function<std::unique_ptr<QueryPlan>(const BuiltSetsByHashPtr &)> query_plan_with_parallel_replicas_builder;
 };

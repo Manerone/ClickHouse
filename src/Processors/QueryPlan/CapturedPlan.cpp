@@ -6,6 +6,7 @@
 #include <Processors/QueryPlan/IQueryPlanStep.h>
 #include <Processors/QueryPlan/QueryPlan.h>
 #include <Processors/QueryPlan/QueryPlanFormat.h>
+#include <Processors/QueryPlan/QueryPlanShapeHash.h>
 #include <Processors/QueryPlan/ReadFromMergeTree.h>
 #include <Processors/QueryPlan/Profiling/Analysis/AnalyzePlanStats.h>
 #include <IO/WriteBufferFromString.h>
@@ -194,7 +195,8 @@ CapturedPlan capturePlan(
     const ExplainPlanOptions & options,
     size_t max_description_length,
     const AnalyzeStepsStats * steps_to_stats,
-    const PrettyNamesPerPlan * pretty_names)
+    const PrettyNamesPerPlan * pretty_names,
+    const QueryPlanShapeHashes * shape_hashes)
 {
     CapturedPlan result;
     if (!plan.isInitialized() || !plan.getRootNode())
@@ -202,6 +204,15 @@ CapturedPlan capturePlan(
 
     result.root_id = plan.getRootNode()->step->getUniqID();
     result.nodes = capturePlanSteps(plan, options, max_description_length, steps_to_stats, pretty_names);
+
+    if (shape_hashes)
+    {
+        for (auto & node : result.nodes)
+        {
+            if (auto it = shape_hashes->steps.find(node.id); it != shape_hashes->steps.end())
+                node.shape_hash = it->second;
+        }
+    }
 
     if (steps_to_stats)
     {

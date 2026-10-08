@@ -5,6 +5,7 @@
 #include <Processors/QueryPlan/QueryPlan.h>
 #include <Processors/QueryPlan/QueryPlanFormat.h>
 #include <Processors/QueryPlan/CapturedPlan.h>
+#include <Processors/QueryPlan/QueryPlanShapeHash.h>
 namespace DB
 {
 
@@ -27,8 +28,8 @@ public:
     static void declineCapture(const ContextPtr & context, const char * reason);
 
     /// Records the plan the query is about to run, taking ownership of it and handing back
-    /// a reference.
-    QueryPlan & captureQueryPlan(QueryPlan plan_);
+    /// a reference. `shape_hashes` must have been computed from that plan.
+    QueryPlan & captureQueryPlan(QueryPlan plan_, QueryPlanShapeHashes shape_hashes_);
 
     /// Records what the pipeline measured. Does not keep the pipeline object, but extracts
     /// the statistics out of it.
@@ -73,11 +74,15 @@ private:
         StepProfilerPtr step_profiler;
         std::optional<PrettyNamesPerPlan> pretty_names;
 
+        /// Taken at the same point as `pretty_names` and for the same reason.
+        std::optional<QueryPlanShapeHashes> shape_hashes;
+
         void release()
         {
             query_plan.reset();
             step_profiler.reset();
             pretty_names.reset();
+            shape_hashes.reset();
         }
     };
 

@@ -20,6 +20,7 @@
 
 #include <Processors/QueryPlan/IQueryPlanStep.h>
 #include <Processors/QueryPlan/QueryPlan.h>
+#include <Processors/QueryPlan/QueryPlanShapeHash.h>
 #include <Processors/QueryPlan/Optimizations/QueryPlanOptimizationSettings.h>
 #include <QueryPipeline/QueryPipelineBuilder.h>
 
@@ -516,6 +517,16 @@ QueryPipelineBuilder InterpreterSelectQueryAnalyzer::buildQueryPipeline()
     /// would double-count the optimization phase.
     query_plan.optimize(optimization_settings);
 
+    /// Hashed after optimization, so it is the shape that runs, and before the pipeline is built,
+    /// which moves the `ActionsDAG` out of the steps. The profiler puts the hash of each step into
+    /// the plan it captures.
+    std::optional<QueryPlanShapeHashes> shape_hashes;
+    if (query_plan_hash_enabled || plan_profiler)
+    {
+        shape_hashes.emplace(hashQueryPlanShape(query_plan));
+        query_plan_hash = shape_hashes->root;
+    }
+
     /// This is necessary because:
     ///  - buildQueryPipeline moves each step's ActionsDAG into its ExpressionActions, and
     ///    buildPrettyNamesPerPlan reads those DAGs, so the names must be built first;
@@ -524,7 +535,7 @@ QueryPipelineBuilder InterpreterSelectQueryAnalyzer::buildQueryPipeline()
     /// Hence: move the plan into the profiler, build the names there, then build the pipeline from it.
     QueryPlan * plan_to_build = &query_plan;
     if (plan_profiler)
-        plan_to_build = &plan_profiler->captureQueryPlan(std::move(planner).extractQueryPlan());
+        plan_to_build = &plan_profiler->captureQueryPlan(std::move(planner).extractQueryPlan(), std::move(*shape_hashes));
 
     ProfileEventTimeIncrement<Microseconds> pipeline_build_time_watch(ProfileEvents::QueryPipelineBuildMicroseconds);
     return std::move(*plan_to_build->buildQueryPipeline(optimization_settings, build_pipeline_settings, /*do_optimize=*/false));

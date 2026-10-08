@@ -18,6 +18,7 @@ class QueryPlan;
 class AnalyzeStepsStats;
 struct ExplainPlanOptions;
 struct PrettyNamesPerPlan;
+struct QueryPlanShapeHashes;
 
 struct CapturedStep
 {
@@ -33,6 +34,11 @@ struct CapturedStep
 
     /// What index analysis decided. Only a `ReadFromMergeTree` has any.
     PlanIndexStats indexes;
+
+    /// Hash of the shape of the subtree under this step, see `hashQueryPlanShape`. Absent for a step
+    /// that did not exist yet when the plan was hashed, such as one in a child plan built while the
+    /// pipeline was.
+    std::optional<UInt64> shape_hash;
 };
 
 /// A whole query: its own steps and the totals.
@@ -60,6 +66,7 @@ CapturedPlan capturePlan(
     const ExplainPlanOptions & options,
     size_t max_description_length,
     const AnalyzeStepsStats * steps_to_stats,
-    const PrettyNamesPerPlan * pretty_names);
+    const PrettyNamesPerPlan * pretty_names,
+    const QueryPlanShapeHashes * shape_hashes);
 
 }

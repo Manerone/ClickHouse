@@ -2564,6 +2564,24 @@ See also:
 - [`EXPLAIN PLAN`](/reference/statements/explain#explain-plan)
 )", BETA, \
         {"26.10", false, false, "New setting to capture the query plan actually executed, together with per-step runtime statistics."}) \
+    DECLARE(Bool, log_query_plan_hash, false, R"(
+Write a hash of the shape of the query plan to the `query_plan_hash` column of [`system.query_log`](/reference/system-tables/query_log).
+
+The hash is equal for two plans that differ only in their constants, and different whenever the optimizer made a different choice — another join algorithm or join order, a projection, an index, reading in order, a filter moved to `PREWHERE`. Together with `normalized_query_hash`, which is equal for queries that differ only in their literals, it shows when the same query started running with a different plan:
+
+```sql
+SELECT normalized_query_hash, groupUniqArray(query_plan_hash) AS plans
+FROM system.query_log
+WHERE type = 'QueryFinish' AND query_plan_hash != 0
+GROUP BY normalized_query_hash
+HAVING length(plans) > 1
+```
+
+Hashing a plan is a single walk over it, so this does not make a query collect any statistics, unlike [`log_query_plans`](#log_query_plans). The column is also filled for queries captured by `log_query_plans`, whether or not this setting is enabled.
+
+Only `SELECT` queries executed with the analyzer (`enable_analyzer = 1`, the default) have a hash; the column is `0` for every other row. The hash is not stable across ClickHouse versions, since a version that changes an optimization changes plans.
+)", BETA, \
+        {"26.10", false, false, "New setting to hash the shape of the query plan into `system.query_log`."}) \
     DECLARE(DistributedProductMode, distributed_product_mode, DistributedProductMode::DENY, R"(
 Changes the behaviour of [distributed subqueries](/reference/statements/in).
 

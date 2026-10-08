@@ -206,6 +206,7 @@ namespace Setting
     extern const SettingsLogQueriesType log_queries_min_type;
     extern const SettingsFloat log_queries_probability;
     extern const SettingsBool log_query_settings;
+    extern const SettingsBool log_query_plan_hash;
     extern const SettingsUInt64 max_ast_depth;
     extern const SettingsUInt64 max_ast_elements;
     extern const SettingsNonZeroUInt64 max_block_size;
@@ -578,6 +579,9 @@ QueryLogElement logQueryStart(
     if (query_ast && settings[Setting::log_formatted_queries])
         elem.formatted_query = query_ast->formatForLogging();
     elem.normalized_query_hash = normalized_query_hash;
+    /// The plan was hashed when the pipeline was built, which is before this row is written, so even
+    /// the `QueryStart` row has it.
+    elem.query_plan_hash = interpreter ? interpreter->getQueryPlanHash() : 0;
     elem.query_kind = query_ast ? query_ast->getQueryKind() : IAST::QueryKind::Select;
 
     elem.client_info = context->getClientInfo();
@@ -3165,6 +3169,11 @@ static BlockIO executeQueryImpl(
                 /// the captured plan. For example: recursive CTEs
                 if (interpreter)
                     interpreter->setPlanProfiler(context->getPlanProfiler());
+
+                /// For the same reason, the hash is asked of this interpreter only. Without a row to
+                /// write it to there is no point in computing it.
+                if (interpreter && settings[Setting::log_query_plan_hash] && settings[Setting::log_queries])
+                    interpreter->enableQueryPlanHash();
 
                 const auto & query_settings = context->getSettingsRef();
                 if (interpreter && context->getCurrentTransaction() && query_settings[Setting::throw_on_unsupported_query_inside_transaction])
