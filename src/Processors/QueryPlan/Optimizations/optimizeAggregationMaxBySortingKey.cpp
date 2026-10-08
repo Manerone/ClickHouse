@@ -372,7 +372,10 @@ static void tryApply(
     auto analysis = reading->getAnalyzedResult();
     if (!analysis)
         analysis = reading->selectRangesToRead();
-    if (!analysis || analysis->readFromProjection())
+    /// A read of a normal projection carries the projection's metadata, so the sorting key and the primary index above
+    /// are the projection's, and its parts are sorted by them. The projection is never chosen here: only the rule is
+    /// applied to the parts of a projection that was already chosen.
+    if (!analysis)
         return;
 
     auto result = std::make_shared<ReadFromMergeTree::AnalysisResult>(*analysis);
@@ -395,7 +398,10 @@ static void tryApply(
     {
         const auto & data_part = part.data_part;
         auto index = data_part->getIndex();
-        if (index->size() >= prefix_size && !index->empty() && !may_hide_rows(data_part))
+        /// Rows hidden in the parent part are hidden in its projection parts too.
+        const bool hides_rows = may_hide_rows(data_part)
+            || (data_part->isProjectionPart() && may_hide_rows(data_part->getParentPart()->shared_from_this()));
+        if (index->size() >= prefix_size && !index->empty() && !hides_rows)
         {
             const auto & columns = *index;
             const size_t index_rows = columns.front()->size();

@@ -180,6 +180,27 @@ FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SE
 SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
 FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, x FROM t ORDER BY k, x DESC LIMIT 1 BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1));
 
+SELECT '-- parts of a projection that was chosen: the projection sorting key is used';
+DROP TABLE IF EXISTS t_projection;
+CREATE TABLE t_projection (symbol String, ts UInt32, price UInt32, PROJECTION by_symbol (SELECT * ORDER BY symbol, ts))
+    ENGINE = MergeTree ORDER BY ts SETTINGS index_granularity = 4, index_granularity_bytes = '10Mi';
+INSERT INTO t_projection SELECT ['A', 'B', 'C', 'D'][number % 4 + 1], number, 1000 - number FROM numbers(48);
+-- The projection is chosen because its primary key narrows the read to B and C.
+SELECT trimLeft(explain) FROM (EXPLAIN indexes = 1 SELECT symbol, max(ts), argMax(price, ts) FROM t_projection WHERE symbol IN ('B', 'C') GROUP BY symbol SETTINGS optimize_aggregation_max_by_sorting_key = 1, optimize_use_projections = 1)
+WHERE explain LIKE '%ReadFromMergeTree%';
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT symbol, max(ts), argMax(price, ts) FROM t_projection WHERE symbol IN ('B', 'C') GROUP BY symbol SETTINGS optimize_aggregation_max_by_sorting_key = 1, optimize_use_projections = 1));
+SELECT symbol, max(ts), argMax(price, ts) FROM t_projection WHERE symbol IN ('B', 'C') GROUP BY symbol ORDER BY symbol SETTINGS optimize_aggregation_max_by_sorting_key = 0, optimize_use_projections = 1;
+SELECT symbol, max(ts), argMax(price, ts) FROM t_projection WHERE symbol IN ('B', 'C') GROUP BY symbol ORDER BY symbol SETTINGS optimize_aggregation_max_by_sorting_key = 1, optimize_use_projections = 1;
+-- The projection is chosen for its sort order.
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT symbol, ts, price FROM t_projection ORDER BY symbol, ts DESC LIMIT 1 BY symbol SETTINGS optimize_aggregation_max_by_sorting_key = 1, optimize_use_projections = 1, optimize_read_in_order = 1));
+SELECT symbol, ts, price FROM t_projection ORDER BY symbol, ts DESC LIMIT 1 BY symbol SETTINGS optimize_aggregation_max_by_sorting_key = 0, optimize_use_projections = 1, optimize_read_in_order = 1;
+SELECT symbol, ts, price FROM t_projection ORDER BY symbol, ts DESC LIMIT 1 BY symbol SETTINGS optimize_aggregation_max_by_sorting_key = 1, optimize_use_projections = 1, optimize_read_in_order = 1;
+-- Without a filter the base table is read; it is sorted by ts, so the rule does not apply.
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT symbol, max(ts) FROM t_projection GROUP BY symbol SETTINGS optimize_aggregation_max_by_sorting_key = 1, optimize_use_projections = 1));
+
 SELECT '-- every part is filtered on its own';
 DROP TABLE IF EXISTS t_parts;
 CREATE TABLE t_parts (k String, m UInt32) ENGINE = MergeTree ORDER BY (k, m) SETTINGS index_granularity = 4, index_granularity_bytes = '10Mi';
@@ -280,3 +301,4 @@ DROP TABLE t_final;
 DROP TABLE t_deleted;
 DROP TABLE t_patched;
 DROP TABLE t_on_fly;
+DROP TABLE t_projection;

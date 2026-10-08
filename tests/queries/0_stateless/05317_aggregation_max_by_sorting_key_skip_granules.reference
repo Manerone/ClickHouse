@@ -200,6 +200,23 @@ Granules: 3/7
 1	9	956
 not applied
 not applied
+-- parts of a projection that was chosen: the projection sorting key is used
+└──ReadFromMergeTree (by_symbol)
+Granules: 3/7
+B	45	955
+C	46	954
+B	45	955
+C	46	954
+Granules: 4/12
+A	44	956
+B	45	955
+C	46	954
+D	47	953
+A	44	956
+B	45	955
+C	46	954
+D	47	953
+not applied
 -- every part is filtered on its own
 Granules: 4/6
 A	112	1
