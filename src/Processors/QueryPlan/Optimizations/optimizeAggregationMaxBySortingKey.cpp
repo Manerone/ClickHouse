@@ -510,6 +510,11 @@ static void tryApply(
         .num_parts_after = result->selected_parts,
         .num_granules_after = sum_marks});
 
+    /// The remaining ranges are short and scattered: size the read tasks by their average length, so that more streams
+    /// read them in parallel instead of few streams reading many of them one after another.
+    if (sum_ranges)
+        reading->limitMinMarksForConcurrentRead(sum_marks / sum_ranges);
+
     reading->setAnalyzedResult(std::move(result));
 }
 
