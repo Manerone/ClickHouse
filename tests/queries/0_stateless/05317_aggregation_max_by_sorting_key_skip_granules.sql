@@ -212,6 +212,25 @@ FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SE
 SELECT k, max(m), min(m) FROM t_parts GROUP BY k SETTINGS optimize_aggregation_max_by_sorting_key = 0;
 SELECT k, max(m), min(m) FROM t_parts GROUP BY k SETTINGS optimize_aggregation_max_by_sorting_key = 1;
 
+SELECT '-- gaps shorter than merge_tree_min_rows_for_seek or merge_tree_min_bytes_for_seek are read through';
+-- max keeps granules 2, 5, 8 and 11: gaps of 2 granules (8 rows). min also keeps 0, 3, 6 and 9: gaps of 1 granule.
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, max(m), argMax(x, m) FROM t GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1, merge_tree_min_rows_for_seek = 4));
+SELECT k, k2, max(m), argMax(x, m) FROM t GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k, k2, max(m), argMax(x, m) FROM t GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1, merge_tree_min_rows_for_seek = 4;
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, max(m), argMax(x, m) FROM t GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1, merge_tree_min_rows_for_seek = 8));
+SELECT k, k2, max(m), argMax(x, m) FROM t GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k, k2, max(m), argMax(x, m) FROM t GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1, merge_tree_min_rows_for_seek = 8;
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, min(m), argMin(x, m) FROM t GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1, merge_tree_min_rows_for_seek = 4));
+SELECT k, k2, min(m), argMin(x, m) FROM t GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k, k2, min(m), argMin(x, m) FROM t GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1, merge_tree_min_rows_for_seek = 4;
+SELECT if(has(lines, 'MaxBySortingKey'), lines[indexOf(lines, 'MaxBySortingKey') + 3], 'not applied') AS granules
+FROM (SELECT groupArray(trimLeft(explain)) AS lines FROM (EXPLAIN indexes = 1 SELECT k, k2, max(m), argMax(x, m) FROM t GROUP BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1, merge_tree_min_bytes_for_seek = 1000000));
+SELECT k, k2, max(m), argMax(x, m) FROM t GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 0;
+SELECT k, k2, max(m), argMax(x, m) FROM t GROUP BY k, k2 ORDER BY k, k2 SETTINGS optimize_aggregation_max_by_sorting_key = 1, merge_tree_min_bytes_for_seek = 1000000;
+
 SELECT '-- not applied: reverse sorting key';
 DROP TABLE IF EXISTS t_reverse;
 CREATE TABLE t_reverse (k String, m UInt32) ENGINE = MergeTree ORDER BY (k, m DESC)

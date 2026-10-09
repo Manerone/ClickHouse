@@ -2,8 +2,10 @@
 
 #include <AggregateFunctions/IAggregateFunction.h>
 #include <Core/Range.h>
+#include <Core/Settings.h>
 #include <DataTypes/IDataType.h>
 #include <Interpreters/ActionsDAG.h>
+#include <Interpreters/Context.h>
 #include <Processors/QueryPlan/AggregatingStep.h>
 #include <Processors/QueryPlan/DistinctStep.h>
 #include <Processors/QueryPlan/ExpressionStep.h>
@@ -15,6 +17,17 @@
 #include <Storages/MergeTree/KeyCondition.h>
 #include <Storages/MergeTree/MergeTreeData.h>
 #include <Common/logger_useful.h>
+
+namespace DB
+{
+
+namespace Setting
+{
+    extern const SettingsUInt64 merge_tree_min_bytes_for_seek;
+    extern const SettingsUInt64 merge_tree_min_rows_for_seek;
+}
+
+}
 
 namespace DB::QueryPlanOptimizations
 {
@@ -162,6 +175,47 @@ static bool outputDependsOnlyOn(const std::optional<ActionsDAG> & dag, const Str
         return columns.contains(name);
     const auto * output = dag->tryFindInOutputs(name);
     return output && dependsOnlyOn(output, columns);
+}
+
+/// The longest gap between kept granules, in marks, that is read through instead of skipped.
+///
+/// Every range of a read has a fixed cost (a seek, a compressed block decompressed again, and on remote disks a request
+/// that may stall a stream). On S3, it is larger than reading one granule of the columns read for queries that do
+/// little work per row, so reading many ranges split by single skipped granules is slower than reading everything.
+/// Measured on 100M rows with 10k groups of about 1.2 granules (every gap one granule long), cold reads from S3: `GROUP BY`
+/// with `argMax` 241 ms without the optimization, 252 ms with it, 233 ms when single-granule gaps are read through.
+/// On local disks, a range is cheap, and skipping single granules is still faster (101 ms, 87 ms, 102 ms warm); so is
+/// a remote disk behind a filesystem cache, once the cache is warm. Longer gaps are worth skipping on all of them. So,
+/// on remote disks without a cache, gaps of one granule are read through, except for `LIMIT BY`: it sorts every row it
+/// reads, so each skipped row saves more than the cost of a range.
+///
+/// `merge_tree_min_rows_for_seek` and `merge_tree_min_bytes_for_seek` raise it, as they do for the ranges of the index
+/// analysis: a gap shorter than that many rows, or bytes in every file of the columns read, is read through. The bytes
+/// of a gap are estimated with the average compressed size of a granule of each column in the part.
+static size_t minMarksForSeek(
+    const IMergeTreeDataPart & part, const Names & columns, size_t num_granules, const Settings & settings, bool for_limit_by)
+{
+    const size_t min_rows_for_seek = settings[Setting::merge_tree_min_rows_for_seek];
+    const size_t min_bytes_for_seek = settings[Setting::merge_tree_min_bytes_for_seek];
+
+    size_t marks = 0;
+    const auto & storage = part.getDataPartStorage();
+    if (!for_limit_by && storage.isStoredOnRemoteDisk() && !storage.getCacheName())
+        marks = 1;
+
+    if (min_rows_for_seek && num_granules)
+        marks = std::max<size_t>(marks, min_rows_for_seek / std::max<size_t>(part.rows_count / num_granules, 1));
+
+    if (min_bytes_for_seek && num_granules)
+    {
+        size_t max_bytes_per_mark = 0;
+        for (const auto & column : columns)
+            max_bytes_per_mark = std::max<size_t>(max_bytes_per_mark, part.getColumnSize(column).data_compressed / num_granules);
+        /// No column read has a file (e.g. only virtual columns): the gaps cost nothing to read.
+        marks = std::max(marks, max_bytes_per_mark ? min_bytes_for_seek / max_bytes_per_mark : num_granules);
+    }
+
+    return marks;
 }
 
 /// For `ORDER BY <keys>, k [DESC] LIMIT n BY <keys>`: the column `k` (a name in the output of the input node), whether
@@ -471,9 +525,14 @@ static void tryApply(
                 return false;
             };
 
+            const size_t min_marks_for_seek = minMarksForSeek(
+                *data_part, reading->getAllColumnNames(), num_granules, context->getSettingsRef(), limit_by.has_value());
+
             MarkRanges new_ranges;
             for (const auto & range : part.ranges)
             {
+                /// Gaps between the ranges selected by the index analysis are left as they are.
+                const size_t first_new_range = new_ranges.size();
                 for (size_t mark = range.begin; mark < range.end; ++mark)
                 {
                     /// Granule `mark` must lie entirely in one run: the next granule starts with the same prefix.
@@ -484,8 +543,8 @@ static void tryApply(
                         can_skip = enough_rows_before(mark);
                     if (can_skip)
                         continue;
-                    if (!new_ranges.empty() && new_ranges.back().end == mark)
-                        ++new_ranges.back().end;
+                    if (new_ranges.size() > first_new_range && mark - new_ranges.back().end <= min_marks_for_seek)
+                        new_ranges.back().end = mark + 1;
                     else
                         new_ranges.push_back(MarkRange(mark, mark + 1));
                 }
