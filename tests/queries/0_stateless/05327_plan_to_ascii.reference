@@ -1,0 +1,53 @@
+Output: k, c
+
+Expression (Project names)
+│  I/O: rows 10 → 10
+│  Time: step 1.00 us (0.05%) · branch 1.50 ms (75.00%)
+│  Concurrency: step 1.00/4 · branch Unknown
+│    time 1.20 us (0.06%) · parallelism 0.83/1
+└──Join (JOIN FillRightFirst)
+   │  t1 ⋈ t2
+   │  Type: inner
+   │  Join conditions: k = k
+   │  Cost: estimated 100.00 · actual 5.00 thousand
+   │  Left: rows estimated 50.00 · rows 5.00 thousand · matched 5.00 thousand · match rate 100.00% · fanout 1.00
+   │  Right: rows estimated no stats · rows 40.00 · matched not collected
+   │  Hash table: unique keys 40.00 · memory 4.10 KB
+   │  FutureGroup: NewMetric 7
+   │  I/O: rows 5.04 thousand → 10 (0.20%) · 80.64 KB → 160 B
+   │    Stage (build): time 300.00 us (15.00%) · parallelism 0.97/1
+   │    Stage (probe): time 500.00 us (25.00%) · parallelism 3.00/4 · sort time 62.50 us · sort share 12.50%
+   ├──ReadFromMergeTree (default.t)
+   │     Read type: Default
+   │     Indexes:
+   │       MinMax
+   │         Keys:
+   │           d
+   │         Condition: true
+   │         Parts: 2
+   │         Granules: 10
+   │       PrimaryKey
+   │         Keys:
+   │           k
+   │           d
+   │         Condition: (k in [1, +Inf))
+   │         Parts: 1/2
+   │         Granules: 3/10
+   │         Search Algorithm: binary search
+   │     I/O: rows 0 → 5.00 thousand · 0 B → 80.00 KB
+   └──ReadFromSystemNumbers
+         I/O: rows 0 → 40 · 0 B → 640 B
+           time 0.00 ns (0.00%) · parallelism Unknown
+
+Output: x
+
+Expression
+└──ReadFromSystemOne
+
+Output: dummy
+
+ReadFromSystemOne
+   I/O: rows 0 → 1 · 0 B → 1 B
+
+\N			
+1	1	1	1
